@@ -380,3 +380,67 @@ if __name__ == "__main__":
     
     # 分析结果
     strategy.analyze_performance(results)
+
+
+
+# ... (前面所有代码不变) ...
+
+    def generate_signals(self):
+        """多层信号生成"""
+        df = self.risk_metrics
+        
+        # 趋势过滤
+        trend_filter = df['Trend_Grade'].isin([1, 2])
+        
+        # 动量信号
+        macd_signal = (df['AMACD'] > df['Signal']) & (df['AMACD'].shift() < df['Signal'].shift())
+        rsi_signal = df['ARSI'].between(40, 60)  # 中性区域过滤
+        
+        # 风险调整
+        vol_ok = df['Vol_Regime'] < 30  # 仅在低波动期交易
+        
+        # 综合信号
+        long_cond = trend_filter & macd_signal & rsi_signal & vol_ok
+        short_cond = (df['Trend_Grade'] == -1) & ~macd_signal & ~rsi_signal
+        
+        # 信号分级
+        df['Signal_Strength'] = 0
+        df.loc[long_cond, 'Signal_Strength'] = self._calculate_signal_strength('long')
+        df.loc[short_cond, 'Signal_Strength'] = self._calculate_signal_strength('short')
+        
+        # 信号平滑
+        df['Signal_Smoothed'] = df['Signal_Strength'].rolling(3, center=True).mean()
+        
+        # 这里加上 price
+        self.signals = df[['price', 'Signal_Smoothed', 'Dynamic_Stop', 'Dynamic_Target']]
+        return self.signals
+
+# ----------------------------------------------------------------------
+# 使用示例
+# ----------------------------------------------------------------------
+if __name__ == "__main__":
+    # 生成更真实的市场数据（包含趋势和波动周期）
+    np.random.seed(42)
+    dates = pd.date_range("2010-01-01", periods=2000)
+    
+    # 生成基础收益率（包含趋势和波动聚集）
+    trend = np.sin(np.linspace(0, 6*np.pi, 2000)) * 0.0005
+    noise = np.random.normal(0, 0.01, 2000) * np.sqrt(np.arange(2000)/2000)
+    daily_rets = pd.Series(trend + noise, index=dates).clip(-0.05, 0.05)
+    
+    # 构造周收益率（注意这里的括号）
+    weekly_rets = daily_rets.resample('W-FRI').apply(lambda x: (1 + x).prod() - 1)
+    
+    # 初始化策略
+    strategy = EnhancedTimingStrategy(daily_rets, weekly_rets)
+    strategy.calculate_indicators()
+    
+    # 生成信号
+    signals = strategy.generate_signals()
+    
+    # 执行回测
+    results = strategy.execute_trades(signals)
+    
+    # 分析结果
+    strategy.analyze_performance(results)
+
