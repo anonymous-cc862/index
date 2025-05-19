@@ -194,3 +194,45 @@ if __name__ == '__main__':
     print(f"最终净值: {results['value'].iloc[-1]:,.2f}")
     print(f"最大回撤: {(results['value'].cummax() - results['value']).max():,.2f}")
     strategy.plot_results(results)
+
+
+
+def generate_signals(self):
+    """生成交易信号（修复shift错误）"""
+    df = self.daily_indicators.iloc[self.volatility_window:].copy()
+    
+    # 周线趋势对齐
+    weekly_ma = self.weekly_price['MA10_Up'].reindex(df.index, method='ffill').fillna(False)
+    df['Weekly_Trend'] = np.where(weekly_ma, 1, -1)
+    
+    # 日线信号（先创建列，再shift）
+    # 修复点1：MA交叉信号
+    df['MA_Cross'] = np.where(df['MA5'] > df['MA20'], 1, -1)
+    df['MA_Cross'] = df['MA_Cross'].shift(1)  # 正确用法
+    
+    # 修复点2：RSI信号
+    df['RSI_Signal'] = np.where(df['RSI'] < 30, 1, np.where(df['RSI'] > 70, -1, 0))
+    df['RSI_Signal'] = df['RSI_Signal'].shift(1)
+    
+    # 修复点3：MACD信号
+    df['MACD_Signal'] = np.where(df['MACD'] > df['Signal'], 1, -1)
+    df['MACD_Signal'] = df['MACD_Signal'].shift(1)
+    
+    # 动量过滤条件
+    df['Trend_Valid'] = df['Momentum'] > 0.03
+    
+    # 综合信号（保持原逻辑）
+    long_condition = (
+        (df['Weekly_Trend'] == 1) &
+        (df[['MA_Cross','RSI_Signal','MACD_Signal']].sum(axis=1) >= 2) &
+        df['Trend_Valid']
+    )
+    short_condition = (
+        (df['Weekly_Trend'] == -1) &
+        (df[['MA_Cross','RSI_Signal','MACD_Signal']].sum(axis=1) <= -2) &
+        (~df['Trend_Valid'])
+    )
+    
+    df['Long_Signal'] = long_condition.astype(int)
+    df['Short_Signal'] = short_condition.astype(int)
+    return df
