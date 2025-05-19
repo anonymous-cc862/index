@@ -1,0 +1,96 @@
+class EnhancedTimingStrategy:
+    def __init__(self, daily_returns: pd.Series):
+        # 将收益率转为价格
+        self.price = self._to_price(daily_returns).rename("price").to_frame()
+        self.initial_capital = 1_000_000
+        # 资金管理参数
+        self.base_risk = 0.05      # 每笔交易最多亏 5% 资金
+        self.max_single = 0.3      # 单标的最大仓位 30%
+        self.cost = {"c": 0.0005, "s": 0.0003, "t": 0.001}
+
+    # ---------- 工具 ----------
+    @staticmethod
+    def _to_price(r: pd.Series) -> pd.Series:
+        r = r.clip(-0.15, 0.15).replace(0, 1e-6)
+        return 100 * (1 + r).cumprod()
+
+    # ---------- 指标计算 ----------
+    def calc_indicators(self):
+        df = self.price
+        df["EMA20"] = df["price"].ewm(span=20).mean()
+        df["EMA50"] = df["price"].ewm(span=50).mean()
+        delta = df["price"].diff()
+        gain, loss = delta.clip(lower=0), -delta.clip(upper=0)
+        rs = gain.rolling(14).mean() / (loss.rolling(14).mean() + 1e-6)
+        df["RSI"] = 100 - 100 / (1 + rs)
+        df["ATR"] = df["price"].diff().abs().rolling(14).mean()
+        self.df = df.dropna().copy()
+
+    # ---------- 生成信号 ----------
+    def generate_signals(self):
+        df = self.df.copy()
+        df["trend"] = np.where(df["EMA20"] > df["EMA50"], 1, -1)
+        df["mom"] = np.select([df["RSI"] > 55, df["RSI"] < 45], [1, -1], 0)
+        df["raw"] = df["trend"] * df["mom"]
+        df["signal"] = df["raw"].where(df["raw"].shift(fill_value=0) != df["raw"], 0)
+        self.signals = df[["price", "signal", "ATR"]]
+        return self.signals
+
+    # ---------- 头寸大小 ----------
+    def _position_size(self, px, nav):
+        risk_dollar = nav * self.base_risk
+        size = int(min(risk_dollar / (2 * px), nav * self.max_single / px))
+        return max(size, 0)
+
+    # ---------- 回测 ----------
+    def backtest(self):
+        port = {"cash": self.initial_capital, "pos": 0, "stop": 0, "tp": 0}
+        log = []
+        for dt, row in self.signals.iterrows():
+            px, sig, atr = row["price"], row["signal"], row["ATR"]
+            # 平仓
+            if port["pos"] != 0 and (px <= port["stop"] or px >= port["tp"]):
+                self._close(port, px)
+            # 开仓
+            if sig != 0 and port["pos"] == 0:
+                self._open(port, sig, px, atr)
+            nav = port["cash"] + port["pos"] * px
+            log.append({"date": dt, "nav": nav})
+        self.results = pd.DataFrame(log).set_index("date")
+        return self.results
+
+    # ---------- 开/平仓 ----------
+    def _open(self, port, sig, px, atr):
+        size = self._position_size(px, port["cash"])
+        fee = px * size * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if sig > 0 else 0))
+        port["cash"] -= fee
+        port["pos"] = size if sig > 0 else -size
+        port["stop"] = px - 2 * atr if sig > 0 else px + 2 * atr
+        port["tp"] = px + 3 * atr if sig > 0 else px - 3 * atr
+
+    def _close(self, port, px):
+        value = port["pos"] * px
+        fee = abs(value) * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if port["pos"] > 0 else 0))
+        port["cash"] += value - fee
+        port.update({"pos": 0, "stop": 0, "tp": 0})
+
+    # ---------- 绩效展示 ----------
+    def performance(self):
+        ret = self.results["nav"].pct_change().dropna()
+        ann_ret = ret.mean() * 252
+        sharpe = (ret.mean() / ret.std()) * np.sqrt(252) if ret.std() else 0
+        dd = (self.results["nav"].cummax() - self.results["nav"]) / self.results["nav"].cummax()
+        print(f"Ann return: {ann_ret:.2%};  Sharpe: {sharpe:.2f};  MaxDD: {dd.max():.2%}")
+
+        # 绘图
+        plt.figure(figsize=(10, 4))
+        (self.results["nav"] /self.results["nav"].iloc[0]).plot(label="strategy")#self.initial_capital).plot(label="strategy")
+
+        bm = self.price["price"].reindex(self.results.index)
+        bm_nav = bm / bm.iloc[0] #* self.initial_capital
+       # (bm_nav / self.initial_capital).plot(label="benchmark")
+        bm_nav.plot(label="benchmark")
+
+        plt.title("Strategy NAV vs Benchmark")
+        plt.legend(); plt.show()
+        print(bm_nav)
