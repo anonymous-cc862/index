@@ -1,0 +1,259 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+class TimingStrategy:
+    """Enhanced timing strategy with bug-fixes and cleaner cash-flow handling."""
+
+    # ------------------------------------------------------------------
+    # 1. ────────────────────────── INITIALISATION ─────────────────────
+    # ------------------------------------------------------------------
+    def __init__(self, daily_returns: pd.Series, weekly_returns: pd.Series):
+        self.daily_price = self._returns_to_price(daily_returns).to_frame("price")
+        self.weekly_price = self._returns_to_price(weekly_returns).to_frame("price")
+
+        # parameters ----------------------------------------------------
+        self.initial_capital = 1000000
+        self.risk_per_trade = 0.01  # 1 % risk per trade
+        self.stop_loss_multiplier = 2.5
+        self.take_profit_multiplier = 2.0
+        self.trading_cost = 0.001  # 0.1 % each transaction (both entry & exit)
+        self.min_hold_days = 3  # minimum holding period (calendar days)
+        self.volatility_window = 30
+        self.max_cap_ratio = 0.6   # 新增
+
+    # ------------------------------------------------------------------
+    # 2. ────────────────────────── UTILITIES ──────────────────────────
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _returns_to_price(returns: pd.Series) -> pd.Series:
+        """Convert returns to pseudo-price; clip large moves to ±5 %."""
+        safe = returns.clip(-0.05, 0.05)
+        price = 100 * (1 + safe).cumprod().replace(0, 1e-6)
+        return price
+
+    # ------------------------------------------------------------------
+    # 3. ────────────────────────── INDICATORS ─────────────────────────
+    # ------------------------------------------------------------------
+    def calculate_indicators(self):
+        # ─ week-level trend -------------------------------------------
+        wk = self.weekly_price
+        wk["MA10"] = wk["price"].rolling(10).mean()
+        # MA10 slope up?  shift(1) prevents current-week look-ahead
+        wk["MA10_Up"] = wk["MA10"].diff() > 0
+        wk["MA10_Up"] = wk["MA10_Up"].shift(1)
+
+        # ─ day-level indicators ---------------------------------------
+        df = self.daily_price.copy()
+        df["MA5"] = df["price"].rolling(5).mean()
+        df["MA20"] = df["price"].rolling(20).mean()
+
+        # RSI
+        delta = df["price"].diff().fillna(0)
+        gain = delta.clip(lower=0)
+        loss = (-delta).clip(lower=0)
+        avg_gain = gain.rolling(14).mean()
+        avg_loss = loss.rolling(14).mean()
+        rs = avg_gain / (avg_loss + 1e-6)
+        df["RSI"] = 100 - 100 / (1 + rs)
+
+        # MACD
+        ema12 = df["price"].ewm(span=12, adjust=False).mean()
+        ema26 = df["price"].ewm(span=26, adjust=False).mean()
+        df["MACD"] = ema12 - ema26
+        df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+
+        # volatility (std of pct-change)
+        df["Volatility"] = (
+            df["price"].pct_change()
+            .rolling(self.volatility_window)
+            .std()
+            .bfill()
+            .fillna(0.01)
+        )
+
+        # 20-day momentum
+        df["Momentum"] = df["price"].pct_change(20)
+
+        self.daily_indicators = df
+
+    # ------------------------------------------------------------------
+    # 4. ────────────────────────── SIGNALS ────────────────────────────
+    # ------------------------------------------------------------------
+    def generate_signals(self):
+        df = self.daily_indicators.iloc[self.volatility_window :].copy()
+
+        # align weekly trend to daily index (preventing look-ahead)
+        weekly_flag = self.weekly_price["MA10_Up"].reindex(df.index, method="ffill").fillna(False)
+        df["Weekly_Trend"] = np.where(weekly_flag, 1, -1)
+
+        # daily signals (shifted by 1 bar)
+        df["MA_Cross"] = (df["MA5"] > df["MA20"]).astype(int).replace(0, -1).shift(1)
+
+        rsi_sig = np.where(df["RSI"] < 30, 1, np.where(df["RSI"] > 70, -1, 0))
+        df["RSI_Signal"] = pd.Series(rsi_sig, index=df.index).shift(1)
+
+        macd_sig = (df["MACD"] > df["Signal"]).astype(int).replace(0, -1)
+        df["MACD_Signal"] = macd_sig.shift(1)
+
+        df["Trend_Valid"] = df["Momentum"] > 0.03
+
+        #aggregate long / short conditions
+        long_cond = (
+            (df["Weekly_Trend"] == 1)
+            & (df[["MA_Cross", "RSI_Signal", "MACD_Signal"]].sum(axis=1) >= 2)
+            & df["Trend_Valid"]
+        )
+        # long_cond = (
+        #                 (df["WeeklyTrend"] == 1) &
+        #                 (df["MA_cross"] == 1) &           # 先看均线金叉
+        #                 (df[["RSI_sig", "MACD_sig"]].max(axis=1) == 1)  # 只要 RSI 或 MACD 任一配合
+        #                 & df["Trend_Valid"]
+        #             )
+        short_cond = (
+            (df["Weekly_Trend"] == -1)
+            & (df[["MA_Cross", "RSI_Signal", "MACD_Signal"]].sum(axis=1) <= -2)
+            & (~df["Trend_Valid"])
+        )
+        # short_cond = (
+        #                 (df["WeeklyTrend"] == 1) &
+        #                 (df["MA_cross"] == -1) &           # 先看均线金叉
+        #                 (df[["RSI_sig", "MACD_sig"]].min(axis=1) == -1)  # 只要 RSI 或 MACD 任一配合
+        #                 & (~df["Trend_Valid"])
+        #             )
+        df["Long_Signal"] = long_cond.astype(int)
+        df["Short_Signal"] = short_cond.astype(int)
+        return df
+
+    # ------------------------------------------------------------------
+    # 5. ────────────────────────── POSITION SIZING ────────────────────
+    # ------------------------------------------------------------------
+    def position_sizing(self, date, price: float, vol: float, capital: float) -> int:
+        if pd.isna(vol) or vol <= 0:
+            return 0
+
+        # dynamic historical vol threshold up-to current date
+        hist_vol = self.daily_indicators.loc[:date, "Volatility"].quantile(0.9)
+        adj_risk = self.risk_per_trade * (0.5 if vol > hist_vol else 1)
+        risk_amt = adj_risk * capital
+
+        # dollar move per stop
+        stop_move = self.stop_loss_multiplier * vol * price
+        stop_move = max(stop_move, 0.01 * price)  # floor 1 %
+        shares = risk_amt / stop_move
+        max_shares =  self.max_cap_ratio * capital / price #0.2 * capital / price
+        return int(max(1, min(shares, max_shares)))
+
+    # ------------------------------------------------------------------
+    # 6. ────────────────────────── BACKTEST ───────────────────────────
+    # ------------------------------------------------------------------
+
+    def backtest(self):
+        sig = self.generate_signals()
+
+        cash, position = self.initial_capital, 0        # 现金 & 持仓(±股数)
+        entry_price, hold_days, stop_price = 0.0, 0, None
+        ledger = []
+
+        for date, row in sig.iterrows():
+            price, vol = row['price'], row['Volatility']
+
+            # ----------- 已有仓位：更新跟踪止损，判断是否平仓 -----------
+            if position != 0:
+                hold_days += 1
+
+                if position > 0:          # 多头
+                    # 抬高止损线：取历史 stop_price 与 "今天价格 - 2×vol" 的最大值
+                    stop_price = max(stop_price, price * (1 - 2 * vol))
+                    hit_exit = price <= stop_price
+                else:                     # 空头
+                    # 下移止损线：取历史 stop_price 与 "今天价格 + 2×vol" 的最小值
+                    stop_price = min(stop_price, price * (1 + 2 * vol))
+                    hit_exit = price >= stop_price
+
+                if hit_exit and hold_days >= self.min_hold_days:
+                    # 按方向计算现金流，手续费仍计一次
+                    cash += position * price * (1 - self.trading_cost)
+                    position, entry_price, hold_days, stop_price = 0, 0.0, 0, None
+
+            # ------------------ 无仓位：根据信号开仓 -------------------
+            if position == 0:
+                # ----- Long -----
+                if row['Long_Signal'] == 1:
+                    shares = self.position_sizing(date, price, vol, cash)
+                    if shares > 0:
+                        cash -= shares * price * (1 + self.trading_cost)   # 买入付现
+                        position, entry_price = shares, price
+                        stop_price = price * (1 - 2 * vol)                 # 初始止损
+                        hold_days = 0
+
+                # ----- Short -----
+                elif row['Short_Signal'] == 1:
+                    shares = self.position_sizing(date, price, vol, cash)
+                    if shares > 0:
+                        cash += shares * price * (1 - self.trading_cost)   # 卖空收现
+                        position, entry_price = -shares, price
+                        stop_price = price * (1 + 2 * vol)                 # 初始止损
+                        hold_days = 0
+
+            # ------------------ 记录账户净值 ---------------------------
+            ledger.append({'date': date,
+                        'value': cash + position * price})
+
+        return pd.DataFrame(ledger).set_index('date')
+
+    # ------------------------------------------------------------------
+    # helper: trade cash-flow ------------------------------------------
+    def _open_trade(self, shares: int, price: float) -> float:
+        """Return cash delta when opening *positive* share quantity.
+        For long: cash_out = shares*price*(1+fee)
+        For short: cash_in  = shares*price*(1-fee)
+        Caller decides +/- based on direction.
+        """
+        fee = self.trading_cost
+        return shares * price * (1 + fee)
+
+    def _close_trade(self, position: int, price: float) -> float:
+        """Return cash delta when closing existing position."""
+        fee = self.trading_cost
+        if position > 0:  # sell long
+            return position * price * (1 - fee)
+        else:  # buy back short
+            shares = -position
+            return -shares * price * (1 + fee)
+
+    # ------------------------------------------------------------------
+    # 7. ────────────────────────── VISUALS ────────────────────────────
+    # ------------------------------------------------------------------
+    def plot_results(self, nav: pd.DataFrame):
+        plt.figure(figsize=(12, 6))
+        nav["value"].plot(label="Strategy")
+        bh = self.daily_price["price"] / self.daily_price["price"].iloc[0] * self.initial_capital
+        bh.plot(label="Buy & Hold")
+        plt.title("Strategy vs Buy&Hold")
+        plt.ylabel("Portfolio Value")
+        plt.legend()
+        plt.show()
+
+
+# ----------------------------------------------------------------------
+# example usage ---------------------------------------------------------
+if __name__ == "__main__":
+    np.random.seed(42)
+    dates = pd.date_range("2015-01-01", periods=2000)
+
+    trend = np.linspace(0, 0.0002, 2000)
+    noise = np.random.normal(0, 0.01, 2000) * np.sqrt(np.arange(2000) / 2000)
+    daily_rets = pd.Series(trend + noise, index=dates).clip(-0.05, 0.05)
+    weekly_rets = daily_rets.resample("W-FRI").apply(lambda x: (1 + x).prod() - 1)
+
+    strat = TimingStrategy(daily_rets, weekly_rets)
+    strat.calculate_indicators()
+    nav = strat.backtest()
+
+    print(f"Final NAV: {nav['value'].iloc[-1]:,.2f}")
+    dd = (nav["value"].cummax() - nav["value"]).max()
+    print(f"Max Drawdown: {dd:,.2f}")
+
+    strat.plot_results(nav)
