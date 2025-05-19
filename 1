@@ -1,0 +1,141 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+class TimingStrategy:
+    def __init__(self, daily_returns, weekly_returns):
+        # 数据预处理
+        self.daily_price = self._returns_to_price(daily_returns)
+        self.weekly_price = self._returns_to_price(weekly_returns)
+        
+        # 参数设置
+        self.initial_capital = 1_000_000
+        self.risk_per_trade = 0.01  # 单笔风险1%
+        self.stop_loss_multiplier = 2
+        self.trading_cost = 0.001  # 0.1%交易成本
+
+    def _returns_to_price(self, returns):
+        """将收益率序列转换为价格序列"""
+        return 100 * (1 + returns).cumprod()
+
+    def calculate_indicators(self):
+        """计算所有技术指标"""
+        # 周线趋势指标
+        self.weekly_price['MA10'] = self.weekly_price['price'].rolling(10).mean()
+        
+        # 日线指标
+        df = self.daily_price.copy()
+        # 双均线
+        df['MA5'] = df['price'].rolling(5).mean()
+        df['MA20'] = df['price'].rolling(20).mean()
+        # RSI
+        delta = df['price'].diff()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.rolling(14).mean()
+        avg_loss = loss.rolling(14).mean()
+        rs = avg_gain / avg_loss
+        df['RSI'] = 100 - (100 / (1 + rs))
+        # MACD
+        exp12 = df['price'].ewm(span=12, adjust=False).mean()
+        exp26 = df['price'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = exp12 - exp26
+        df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        # 波动率替代指标（20日收益率标准差）
+        df['Volatility'] = df['price'].pct_change().rolling(20).std()
+        
+        self.daily_indicators = df
+
+    def generate_signals(self):
+        """生成交易信号"""
+        df = self.daily_indicators.copy()
+        weekly = self.weekly_price.resample('W-FRI').last()  # 对齐周线日期
+        
+        # 趋势方向
+        df['Weekly_Trend'] = np.where(df['price'] > weekly['MA10'].reindex(df.index, method='ffill'), 1, -1)
+        
+        # 日线信号
+        df['MA_Cross'] = np.where(df['MA5'] > df['MA20'], 1, -1)
+        df['RSI_Signal'] = np.where(df['RSI'] < 30, 1, np.where(df['RSI'] > 70, -1, 0))
+        df['MACD_Signal'] = np.where(df['MACD'] > df['Signal'], 1, -1)
+        
+        # 综合信号
+        df['Long_Signal'] = ((df['Weekly_Trend'] == 1) & 
+                           (df[['MA_Cross','RSI_Signal','MACD_Signal']].sum(axis=1) >= 2)).astype(int)
+        df['Short_Signal'] = ((df['Weekly_Trend'] == -1) & 
+                            (df[['MA_Cross','RSI_Signal','MACD_Signal']].sum(axis=1) <= -2)).astype(int)
+        return df
+
+    def position_sizing(self, price, volatility, capital):
+        """仓位计算（波动率替代ATR）"""
+        if volatility == 0: return 0
+        risk_amount = self.risk_per_trade * capital
+        # 波动率转换为价格波动幅度：波动率 * 当前价格
+        volatility_amount = volatility * price
+        position = risk_amount / (self.stop_loss_multiplier * volatility_amount)
+        return int(position)
+
+    def backtest(self):
+        """回测引擎"""
+        signals = self.generate_signals()
+        capital = self.initial_capital
+        position = 0
+        trades = []
+        
+        for date, row in signals.iterrows():
+            current_price = row['price']
+            volatility = row['Volatility']
+            
+            # 平仓逻辑
+            if position != 0:
+                # 止损/止盈逻辑（示例：固定比例止损）
+                if (position > 0 and current_price < entry_price * 0.98) or 
+                   (position < 0 and current_price > entry_price * 1.02):
+                    capital += position * current_price * (1 - self.trading_cost)
+                    position = 0
+            
+            # 开仓逻辑
+            if row['Long_Signal'] and position <= 0:
+                if position < 0:  # 先平空头
+                    capital += position * current_price * (1 - self.trading_cost)
+                position_size = self.position_sizing(current_price, volatility, capital)
+                cost = position_size * current_price * self.trading_cost
+                capital -= cost
+                position = position_size
+                entry_price = current_price
+                
+            elif row['Short_Signal'] and position >= 0:
+                if position > 0:  # 先平多头
+                    capital += position * current_price * (1 - self.trading_cost)
+                position_size = self.position_sizing(current_price, volatility, capital)
+                cost = position_size * current_price * self.trading_cost
+                capital -= cost
+                position = -position_size
+                entry_price = current_price
+            
+            # 记录每日净值
+            daily_value = capital + position * current_price
+            trades.append({'date':date, 'value':daily_value})
+        
+        return pd.DataFrame(trades).set_index('date')
+
+    def plot_results(self, result):
+        """可视化回测结果"""
+        plt.figure(figsize=(12,6))
+        result['value'].plot(title='Strategy Performance')
+        plt.ylabel('Portfolio Value')
+        plt.show()
+
+# 使用示例
+if __name__ == '__main__':
+    # 假设已有收益率数据（需替换为实际数据）
+    daily_returns = pd.Series(np.random.normal(0.0005, 0.01, 500), 
+                            index=pd.date_range('2020-01-01', periods=500))
+    weekly_returns = daily_returns.resample('W-FRI').apply(lambda x: (1+x).prod()-1)
+    
+    strategy = TimingStrategy(daily_returns, weekly_returns)
+    strategy.calculate_indicators()
+    results = strategy.backtest()
+    
+    print(f"Final Portfolio Value: {results['value'].iloc[-1]:,.2f}")
+    strategy.plot_results(results)
