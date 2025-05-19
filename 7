@@ -1,0 +1,54 @@
+def backtest(self):
+    port = {"cash": self.initial_capital, "pos": 0, "stop": 0, "tp": 0}
+    log = []
+    peak = self.initial_capital  # 历史高点
+    in_drawdown = False
+    drawdown_entry_peak = peak   # 熔断发生时的高点
+    drawdown_trigger_nav = peak  # 熔断发生时的净值
+
+    for dt, row in self.signals.iterrows():
+        px, sig, atr = row["price"], row["signal"], row["ATR"]
+
+        # 1. 计算账户净值
+        nav = port["cash"] + port["pos"] * px
+        log.append({"date": dt, "nav": nav})
+
+        # 2. 记录高点
+        if nav > peak:
+            peak = nav
+
+        # 3. 计算最大回撤
+        drawdown = (peak - nav) / peak
+
+        # 4. 熔断&冷静期处理
+        if in_drawdown:
+            # 熔断期内，只能平仓，不能新开仓
+            if port["pos"] != 0 and (px <= port["stop"] or px >= port["tp"]):
+                self._close(port, px)
+
+            # 冷静期解除机制：净值恢复到“熔断高点-10%”以内
+            recovery_drawdown = (drawdown_entry_peak - nav) / drawdown_entry_peak
+            if recovery_drawdown <= 0.10:
+                in_drawdown = False
+                print(f"[恢复交易] {dt}，回撤已恢复至10%以内，解除熔断！")
+            continue
+
+        # 5. 熔断触发：超阈值立即平仓并熔断
+        if drawdown > self.max_drawdown:
+            if port["pos"] != 0:
+                self._close(port, px)
+            in_drawdown = True
+            drawdown_entry_peak = peak      # 记录熔断高点
+            drawdown_trigger_nav = nav      # 熔断时净值
+            print(f"[熔断] {dt}，最大回撤超限，净值={nav:.2f}")
+            continue
+
+        # 6. 正常平仓
+        if port["pos"] != 0 and (px <= port["stop"] or px >= port["tp"]):
+            self._close(port, px)
+        # 7. 正常开仓（熔断解除后才允许）
+        if sig != 0 and port["pos"] == 0:
+            self._open(port, sig, px, atr)
+
+    self.results = pd.DataFrame(log).set_index("date")
+    return self.results
