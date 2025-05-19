@@ -167,3 +167,9 @@ def _reduce_or_reverse(self, port, sig, px, atr):
         fee = abs(value) * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if port["pos"] > 0 else 0))
         port["cash"] += value - fee
         port.update({"pos": 0, "stop": 0, "tp": 0})
+
+
+if port["pos"] > 0 and (px <= port["stop"] or px >= port["tp"]):
+    self._close(port, px)
+elif port["pos"] < 0 and (px >= port["stop"] or px <= port["tp"]):
+    self._close(port, px)
