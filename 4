@@ -1,0 +1,260 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import linregress
+
+class EnhancedTimingStrategy:
+    """多因子自适应量化择时回测框架（修正版）"""
+
+    def __init__(self, daily_returns: pd.Series, weekly_returns: pd.Series):
+        # 数据预处理，转成“价格”序列
+        self.daily_price = (
+            self._process_returns(daily_returns.squeeze())
+            .rename("price")
+            .to_frame()
+        )
+        self.weekly_price = (
+            self._process_returns(weekly_returns.squeeze())
+            .rename("price")
+            .to_frame()
+        )
+        self.initial_capital = 1_000_000
+        self.risk_profile = {
+            "base_risk": 0.01,
+            "vol_scaling": True,
+            "max_drawdown": 0.20,
+            "position_limits": {
+                "single": 0.3,
+                "sector": 0.6,
+            },
+        }
+        self.cost_model = {
+            "commission": 0.0005,
+            "slippage": 0.0003,
+            "tax_rate": 0.001,
+        }
+        self._init_adaptive_params()
+
+    def _init_adaptive_params(self):
+        self.adaptive_params = {
+            "trend_strength": 0.5,
+            "volatility_regime": 1.0,
+            "market_bias": 0.0,
+        }
+
+    @staticmethod
+    def _process_returns(returns: pd.Series) -> pd.Series:
+        cleaned = returns.clip(-0.1, 0.1).replace(0, 1e-6)
+        price = 100 * (1 + cleaned).cumprod()
+        return price.ffill().bfill()
+
+    def calculate_indicators(self):
+        self._calculate_trend_indicators()
+        self._calculate_momentum_oscillators()
+        self._analyze_market_regime()
+        self._calculate_risk_metrics()
+
+    def _calculate_trend_indicators(self):
+        df = self.daily_price.copy()
+        lookback = max(5, int(21 * self.adaptive_params["volatility_regime"]))
+        df["AMA"] = df["price"].ewm(span=lookback, adjust=False).mean()
+        high = df["price"].rolling(20).max()
+        low = df["price"].rolling(20).min()
+        df["Trend_Channel"] = (high + low) / 2
+        if len(df) >= 20:
+            slope, *_ = linregress(np.arange(20), df["price"].tail(20))
+            self.adaptive_params["trend_strength"] = abs(slope) * 100
+        else:
+            self.adaptive_params["trend_strength"] = 0.5
+        self.trend_indicators = df
+
+    def _calculate_momentum_oscillators(self):
+        df = self.trend_indicators
+        rsi_period = min(14, max(5, int(14 * self.adaptive_params["volatility_regime"])))
+        delta = df["price"].diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.ewm(alpha=1 / rsi_period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1 / rsi_period, adjust=False).mean()
+        rs = avg_gain / (avg_loss + 1e-6)
+        df["ARSI"] = 100 - 100 / (1 + rs)
+        fast = int(12 * (2 - self.adaptive_params["market_bias"]))
+        slow = int(26 * (2 - self.adaptive_params["market_bias"]))
+        signal = int(9 * (2 - self.adaptive_params["market_bias"]))
+        exp1 = df["price"].ewm(span=fast, adjust=False).mean()
+        exp2 = df["price"].ewm(span=slow, adjust=False).mean()
+        df["AMACD"] = exp1 - exp2
+        df["Signal"] = df["AMACD"].ewm(span=signal, adjust=False).mean()
+        self.momentum_indicators = df
+
+    def _analyze_market_regime(self):
+        df = self.momentum_indicators
+        vol = df["price"].pct_change().rolling(30).std()
+        self.adaptive_params["volatility_regime"] = (vol.iloc[-1] / vol.mean()) if vol.mean() != 0 else 1.0
+        above_ama = (df["price"] > df["AMA"]).astype(int)
+        self.adaptive_params["market_bias"] = above_ama.rolling(10).mean().iloc[-1] - 0.5
+        conditions = [
+            df["price"] > df["Trend_Channel"] * 1.05,
+            df["price"] > df["Trend_Channel"],
+            df["price"] < df["Trend_Channel"] * 0.95,
+        ]
+        choices = [2, 1, -1]
+        df["Trend_Grade"] = np.select(conditions, choices, default=0)
+        self.regime_analysis = df
+
+    def _calculate_risk_metrics(self):
+        df = self.regime_analysis
+        atr = df["price"].rolling(14).apply(lambda x: np.mean(np.abs(x.diff())))
+        df["Dynamic_Stop"] = df["price"] - 2.5 * atr
+        df["Dynamic_Target"] = df["price"] + 3.5 * atr
+        lookbacks = [14, 30, 60]
+        vol_cone = pd.DataFrame(
+            {f"vol_{lb}": df["price"].pct_change().rolling(lb).std() for lb in lookbacks}
+        )
+        df["Vol_Regime"] = vol_cone.idxmax(axis=1).str.extract(r"(\d+)").astype(float)
+        self.risk_metrics = df
+
+    def generate_signals(self):
+        df = self.risk_metrics.copy()
+        trend_filter = df['Trend_Grade'].isin([1, 2])
+        macd_signal = (df['AMACD'] > df['Signal']) & (df['AMACD'].shift() < df['Signal'].shift())
+        rsi_signal = df['ARSI'].between(40, 60)
+        vol_ok = df['Vol_Regime'] < 30
+        long_cond = trend_filter & macd_signal & rsi_signal & vol_ok
+        short_cond = (df['Trend_Grade'] == -1) & ~macd_signal & ~rsi_signal
+        df['Signal_Strength'] = 0
+        df.loc[long_cond, 'Signal_Strength'] = self._calculate_signal_strength('long')
+        df.loc[short_cond, 'Signal_Strength'] = -self._calculate_signal_strength('short')
+        # 信号去噪（只有信号从0到非0时才触发）
+        df['Signal_Event'] = ((df['Signal_Strength'].shift(1) == 0) & (df['Signal_Strength'] != 0)).astype(int) * df['Signal_Strength']
+        self.signals = df[['price', 'Signal_Event', 'Dynamic_Stop', 'Dynamic_Target']]
+        return self.signals
+
+    def _calculate_signal_strength(self, direction: str):
+        ts = self.adaptive_params["trend_strength"]
+        vr = self.adaptive_params["volatility_regime"]
+        mb = self.adaptive_params["market_bias"]
+        base = ts * (1 + mb) / vr if direction == "long" else ts * (1 - mb) / vr
+        return np.clip(base, 0, 2)
+
+    def position_management(self, current_price: float, portfolio_value: float):
+        vol = self.risk_metrics["Vol_Regime"].iloc[-1]
+        risk_budget = self.risk_profile["base_risk"] * max(0, 1 - min(vol / 0.3, 1))
+        risk_budget = min(risk_budget, self.risk_profile["position_limits"]["single"])
+        position_size = max(1, int((portfolio_value * risk_budget) / current_price))
+        return position_size
+
+    def execute_trades(self, signals: pd.DataFrame):
+        portfolio = {
+            "cash": self.initial_capital,
+            "positions": 0,
+            "entry_price": 0.0,
+            "stop_loss": 0.0,
+            "take_profit": 0.0,
+            "entry_time": None,
+        }
+        trade_log = []
+        circuit_breaker = False
+
+        for date, row in signals.iterrows():
+            current_price = row["price"]
+            signal = row["Signal_Event"]
+
+            # 触发平仓
+            if portfolio["positions"] != 0:
+                self._process_exits(portfolio, current_price, date)
+
+            # 只在信号触发且当前无持仓时开仓
+            if signal != 0 and portfolio["positions"] == 0 and not circuit_breaker:
+                self._process_entries(portfolio, signal, current_price, date)
+
+            nav = portfolio["cash"] + portfolio["positions"] * current_price
+            trade_log.append({"date": date, "nav": nav, "positions": portfolio['positions'], "cash": portfolio['cash']})
+
+            # 监控最大回撤，若触发则熔断，强平并不再开新仓
+            if not circuit_breaker and self._check_circuit_breaker(portfolio, nav):
+                portfolio["positions"] = 0
+                circuit_breaker = True
+
+        return pd.DataFrame(trade_log).set_index("date")
+
+    def _process_exits(self, portfolio, price, date):
+        # 平仓规则（止损、止盈或10天超时）
+        exit_flag = False
+        if price <= portfolio["stop_loss"]:
+            exit_flag = True
+        elif price >= portfolio["take_profit"]:
+            exit_flag = True
+        elif (portfolio["entry_time"] is not None) and ((date - portfolio["entry_time"]).days > 10):
+            exit_flag = True
+        if exit_flag:
+            self._close_position(portfolio, price)
+
+    def _process_entries(self, portfolio, signal, price, date):
+        position_size = self.position_management(price, portfolio["cash"])
+        if position_size == 0:
+            return
+        cost = price * position_size * (
+            self.cost_model["commission"]
+            + self.cost_model["slippage"]
+            + (self.cost_model["tax_rate"] if signal > 0 else 0)
+        )
+        portfolio["cash"] -= cost
+        portfolio["positions"] = position_size * (1 if signal > 0 else -1)
+        portfolio["entry_price"] = price
+        portfolio["entry_time"] = date
+        portfolio["stop_loss"] = price * (0.95 if signal > 0 else 1.05)
+        portfolio["take_profit"] = price * (1.15 if signal > 0 else 0.85)
+
+    def _close_position(self, portfolio, price):
+        value = portfolio["positions"] * price
+        cost = abs(value) * (
+            self.cost_model["commission"]
+            + self.cost_model["slippage"]
+            + (self.cost_model["tax_rate"] if portfolio["positions"] > 0 else 0)
+        )
+        portfolio["cash"] += value - cost
+        portfolio.update(
+            {
+                "positions": 0,
+                "entry_price": 0.0,
+                "stop_loss": 0.0,
+                "take_profit": 0.0,
+                "entry_time": None,
+            }
+        )
+
+    def _check_circuit_breaker(self, portfolio, nav):
+        max_drawdown = (self.initial_capital - nav) / self.initial_capital
+        return max_drawdown > self.risk_profile['max_drawdown']
+
+    def analyze_performance(self, results: pd.DataFrame):
+        returns = results['nav'].pct_change().dropna()
+        benchmark = self.daily_price['price'].pct_change().dropna()
+        print(f"strategy annual return : {returns.mean() * 252:.2%}")
+        print(f"benchmark annual return : {benchmark.mean() * 252:.2%}")
+        print(f"sharp: {returns.mean() / returns.std() * np.sqrt(252):.2f}")
+        peak = results['nav'].cummax()
+        drawdown = (peak - results['nav']) / peak
+        print(f"最大回撤: {drawdown.max():.2%}")
+        plt.figure(figsize=(12, 6))
+        results['nav'].plot(label='strategy net value')
+        base = self.daily_price['price'].reindex(results.index)
+        (base / base.iloc[0] * self.initial_capital).plot(label='benchmark net value')
+        plt.title("compare")
+        plt.legend()
+        plt.show()
+
+# ---------------------- 使用示例 ----------------------
+if __name__ == "__main__":
+    np.random.seed(42)
+    dates = pd.date_range("2010-01-01", periods=2000)
+    trend = np.sin(np.linspace(0, 6*np.pi, 2000)) * 0.0005
+    noise = np.random.normal(0, 0.01, 2000) * np.sqrt(np.arange(2000)/2000)
+    daily_rets = pd.Series(trend + noise, index=dates).clip(-0.05, 0.05)
+    weekly_rets = daily_rets.resample('W-FRI').apply(lambda x: (1 + x).prod() - 1)
+    strategy = EnhancedTimingStrategy(daily_rets, weekly_rets)
+    strategy.calculate_indicators()
+    signals = strategy.generate_signals()
+    results = strategy.execute_trades(signals)
+    strategy.analyze_performance(results)
