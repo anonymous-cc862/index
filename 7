@@ -52,3 +52,53 @@ def backtest(self):
 
     self.results = pd.DataFrame(log).set_index("date")
     return self.results
+
+
+#####
+def backtest(self):
+    port = {"cash": self.initial_capital, "pos": 0, "stop": 0, "tp": 0}
+    log = []
+    for dt, row in self.signals.iterrows():
+        px, sig, atr = row["price"], row["signal"], row["ATR"]
+
+        # === 平仓条件 ===
+        if port["pos"] != 0 and (px <= port["stop"] or px >= port["tp"]):
+            self._close(port, px)
+        
+        # === 加仓/减仓 ===
+        if sig != 0:
+            if port["pos"] == 0:
+                # 原来空仓，直接建新仓
+                self._open(port, sig, px, atr)
+            elif np.sign(sig) == np.sign(port["pos"]):
+                # 持仓方向与信号同向，加仓
+                self._add_position(port, sig, px, atr)
+            elif np.sign(sig) != np.sign(port["pos"]):
+                # 信号反向，减仓或反手
+                self._reduce_or_reverse(port, sig, px, atr)
+        
+        nav = port["cash"] + port["pos"] * px
+        log.append({"date": dt, "nav": nav, "pos": port["pos"]})
+    self.results = pd.DataFrame(log).set_index("date")
+    return self.results
+
+def _add_position(self, port, sig, px, atr):
+    # 新加一笔同样大小仓位，但需检查资金上限
+    size = self._position_size(px, port["cash"])
+    if size == 0:
+        return  # 没钱了不加
+    fee = px * size * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if sig > 0 else 0))
+    port["cash"] -= fee
+    port["pos"] += size if sig > 0 else -size  # 累加持仓
+    # 可选：加仓后，重设止损/止盈（比如按加权成本价/新ATR等）
+    port["stop"] = px - 2 * atr if port["pos"] > 0 else px + 2 * atr
+    port["tp"] = px + 3 * atr if port["pos"] > 0 else px - 3 * atr
+
+def _reduce_or_reverse(self, port, sig, px, atr):
+    # 简单实现：遇到反向信号时直接全部平仓，然后用新信号反手
+    self._close(port, px)
+    self._open(port, sig, px, atr)
+    # 如果你想“只减仓一半”，可以把加仓代码写成：
+    # reduce_size = min(abs(port["pos"]), self._position_size(px, port["cash"]))
+    # port["pos"] += reduce_size * np.sign(sig)
+    # （复杂处理可单独实现，有需要可以继续问）
