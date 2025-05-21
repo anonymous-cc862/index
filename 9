@@ -1,0 +1,402 @@
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates          # ← 新增
+from pathlib import Path
+
+class EnhancedTimingStrategy:
+    def __init__(self, daily_returns: pd.Series):
+        # 将收益率转为价格
+        self.price = self._to_price(daily_returns).rename("price").to_frame()
+        # print(daily_returns)
+        # print(self.price['price'])
+        self.initial_capital = 1_000_000
+        # 资金管理参数
+        # self.base_risk = 0.15     # 每笔交易最多亏 5% 资金
+        self.max_single = 0.25      # 单标的最大仓位 30%
+        self.cost = {"c": 0.001, "s": 0.0003, "t": 0.001} 
+        self.max_drawdown=0.4
+        self.resume_drawdown=0.1
+        self.circuit_breaker=False
+        self.rsi_lookback=14
+
+        self.base_risk = 0.0025      # ← 单笔亏 NAV 的 0.25%
+        self.stop_atr  = 3          # ← 止损距离 = 2 × ATR
+        #self.max_single = 0.8       # ← 资金占比上限（留作保险杠）
+        # self.vol_floor       = 0.002#0.004     # ATR% 下限 0.3 %
+        # self.vol_cap         = 0.05 #0.02      # ATR% 上限 3 %
+        self.warmup_bars     = 10        # 前 90 根减仓
+        #self.warmup_bars = min(self.warmup_bars, len(self.price) // 5)
+        self.warmup_bars = max(1, min(self.warmup_bars, len(self.price)//5))
+
+        self.RSI_pct_high=0.6
+        self.RSI_pct_low=0.4 
+        self.low_vol_low=0.4
+        self.high_vol_high=0.6
+        self.stoploss_atr=2.5
+        self.takeprofit_atr=3
+
+        self.cooldown_period = 5
+        self.pct_window=60
+
+
+    # ---------- 工具 ----------
+    @staticmethod
+    def _to_price(r: pd.Series) -> pd.Series:
+        r = r.clip(-0.2, 0.2).replace(0, 1e-6)
+        return 100 * (1 + r).cumprod()
+
+    # ---------- 指标计算 ----------
+    def calc_indicators(self):
+        df = self.price
+        df["EMA3"] = df["price"].ewm(span=3).mean()
+        df["EMA7"] = df["price"].ewm(span=7).mean()
+        df["EMA10"] = df["price"].ewm(span=10).mean()
+        df["EMA15"] = df["price"].ewm(span=15).mean()
+        df["EMA20"] = df["price"].ewm(span=20).mean()
+        df["EMA30"] = df["price"].ewm(span=30).mean()
+        df["EMA40"] = df["price"].ewm(span=40).mean()
+        df["EMA50"] = df["price"].ewm(span=50).mean()
+        delta = df["price"].diff()
+        gain, loss = delta.clip(lower=0), -delta.clip(upper=0)
+        rs = gain.rolling(self.rsi_lookback).mean() / (loss.rolling(self.rsi_lookback).mean() + 1e-9)
+        df["RSI"] = 100 - 100 / (1 + rs)
+        df["ATR"] = df["price"].diff().abs().rolling(14).mean()
+        #ret = df['price'].pct_change()
+        df['RV14'] = (np.log(df["price"])).diff().rolling(14).std() #  ret.rolling(14).std()         # 14 日收盘收益率波动
+        #std是每个值abs平均和均值abs差多少，收益率的std是每个收益率和均值收益率差多少
+        df['RV_pct']  = df['RV14'].rolling(self.pct_window, min_periods=20).rank(pct=True)
+            # 120 日滚动窗口取分位
+        df['VOL_FLOOR'] = df['RV14'].rolling(self.pct_window, min_periods=20).quantile(0.20)
+        df['VOL_CAP']   = df['RV14'].rolling(self.pct_window, min_periods=20).quantile(0.80)
+        #df["ATR_pct"]=df["ATR"]/self.price
+        self.df = df.dropna().copy()
+
+    # ---------- 生成信号 ----------
+    def generate_signals(self):  
+        df = self.df.copy()
+        #df["trend"] = np.where(df["EMA20"] > df["EMA50"], 1, -1)
+        # ---- 波动率百分位 ----
+        #df["ATR_pct"] = (df["ATR"] / df["price"]).rolling(120).rank(pct=True)  # 1年分位
+        low_vol  = df['RV_pct'] < self.low_vol_low #0.55           # 共识区
+        high_vol = df['RV_pct'] > self.high_vol_high           # 分歧区
+        print(df['RV_pct'].max(), df['RV_pct'].min())
+
+        # ---- 原趋势 & 动量 ----
+        df['trend']=np.where(df['EMA7']>df['EMA40']*0.995, 1, np.where(df['EMA7']<df['EMA40']*1.005, -1, 0))
+        
+            # ===== ② 动态 RSI 分位数 =====
+        # rank(pct=True) 会返回滚动窗口内的百分位位置 (0~1)
+        df["RSI_pct"] = df["RSI"].rolling(self.pct_window).rank(pct=True)
+        df["mom"] = np.select([df["RSI_pct"]>self.RSI_pct_high, df["RSI_pct"]<self.RSI_pct_low], [1, -1], 0) 
+
+        # #df["signal"]如果0到1，0到-1，开新仓；持续为1或-1，信号为0；从1或-1跳到0，也不会触发信号，实际持仓由止盈止损平掉
+        
+        # ------- 原始方向 ------
+        df["raw"] = np.where(df["trend"] == df["mom"], df["trend"], 0) # #如果raw和前一天raw不一样，signal=raw，其他都0
+
+        # ------- 价反转判据 ------
+        turn_down = (df["raw"] == 1) & (df["EMA3"] < df["EMA20"]) #看涨且价低，高波时，1
+        turn_up   = (df["raw"] == -1) & (df["EMA3"] > df["EMA20"]) #看跌且价高，高波时，-1
+
+        # ------- 组合成最终信号 ------
+
+        df["filt"] = np.select(
+                [ (df["raw"] ==  1) & low_vol,           # 低波顺势多
+                (df["raw"] == -1) & low_vol,           # 低波顺势空
+                high_vol & turn_up,                    # 高波且出现向上反转
+                high_vol & turn_down ],                # 高波且出现向下反转
+                [ 1, -1,  -1, 1], 0) #[ 1, -1,  -1, 1] [ 1, -1,  1, -1]
+        df["signal"] = df["filt"].where(
+                df["filt"].shift(fill_value=0) != df["filt"], 0)
+
+
+        self.signals = df[["price", "signal", 'RV14', 'VOL_FLOOR', 'VOL_CAP']] 
+        print(df['signal'].value_counts())
+        return self.signals
+
+    # ---------- 头寸大小 ----------
+    # def _position_size(self, px, nav):
+    #     risk_dollar = nav * self.base_risk
+    #     size = int(min(risk_dollar / (2 * px), nav * self.max_single / px))
+    #     #最大亏损资金/价格=持仓，再除以2风控常数，不能多于这个持仓
+    #     #nav * self.max_single是最多投多少资金，除以价格是最多持仓
+    #     #持仓是二者最小值
+    #     return max(size, 0)
+    #     #目前好像只考虑了人为定义的持仓，比如最大可忍受的risk，以及定义的最大仓位
+            # ------------- 波动率感知仓位 -----------------
+    def _position_size(self, px, rv, nav, bar_idx, floor, cap):
+        """
+        ATR-based dynamic sizing with volatility floor & cap.
+        参数:
+            px   : 当日收盘价
+            atr  : 14d ATR (absolute)
+            nav  : 账户净值
+        返回:
+            整数手数
+        """
+        # ---- 1) ATR → 百分比波动 ----
+        # atr_pct = atr / px
+
+        # ---- 2) 设波动下限 / 上限 ----
+        # vol_floor = 0.002     # 0.2%  低于此视作 0.2%
+        # vol_cap   = 0.05      # 5%    高于此按 5%
+        rv = np.clip(rv, floor, cap)
+
+        # ---- 3) 目标风险（亏 NAV 的 base_risk）----
+        # 前 warm-up 阶段用 70 % 风险系数
+        risk_frac   = self.base_risk#0.8 * self.base_risk if bar_idx < self.warmup_bars else self.base_risk
+        risk_dollar = nav * risk_frac #单笔亏 NAV 的 0.25%
+
+        per_unit_risk = self.stop_atr * rv * px #估计每手亏损
+        #对数收益是比率，std之后是平均每个值和均值差多少，仍是比率，乘以价格就是第二天亏损的价格（1个单位亏损多少钱），乘以3就是变多风控
+        if per_unit_risk == 0:
+            return 0
+
+        size_by_risk = risk_dollar / per_unit_risk #可承受亏损金额(NAV 的 0.25%) ÷ 1个单位亏损 = 投几个单位，即size，shares
+        size_cap     = nav * self.max_single / px
+        print(f"size_by_risk: {size_by_risk}; size_cap:{size_cap}")
+        return int(max(0, min(size_by_risk, size_cap)))
+
+    # ---------- 回测 ----------
+    #T+0
+    #     return self.results  
+    def backtest(self):
+        running_max = self.initial_capital
+        locked = False
+        port = {"cash": self.initial_capital, "pos": 0, "stop": 0, "tp": 0,  "half_exit": False,  "trail": 0 }
+        log = []
+        cooldown = 0
+        for i, (dt, row) in enumerate(self.signals.iterrows()):
+            #print(row)
+            px, sig = row["price"], row["signal"]#, row["ATR"]
+            rv   = row['RV14']
+            #rv_pct   = row['RV14_pct']
+            floor= row['VOL_FLOOR']
+            cap  = row['VOL_CAP']
+
+            # # ===  分批止盈：到 ±3×ATR 先平一半 ===
+            if port["pos"] != 0 and not port["half_exit"]:
+                reach_tp = (port["pos"]>0 and px >= port["tp"]) or (port["pos"]<0 and px <= port["tp"])
+                if reach_tp:
+                    half = abs(port["pos"]) // 2
+                    if half:                                  # 有整数手
+                        fee = px*half*(self.cost["c"]+self.cost["s"]+(self.cost["t"] if port["pos"]>0 else 0))
+                        port["cash"] += half*px - fee
+                        port["pos"]  += -half if port["pos"]>0 else  half
+                        port["half_exit"] = True
+                        port["trail"] = px # 追踪止损起点,把 trail 初始为当前价格
+
+
+            # ---------- ② 追踪止损 ----------
+            if port["pos"] != 0 and port["half_exit"]:
+                self._update_trail(port, px, rv) #更新stop
+
+            # ---------- ③ 止损平尾仓 ----------
+            if (port["pos"]>0 and px <= port["stop"]) or (port["pos"]<0 and px >= port["stop"]):
+                self._close(port, px) #若达到止损线 → 全平、手续费结算、当天禁止再反手
+                sig = 0 # 当天已平仓，后面不再建仓
+
+# 这样策略会： 
+# 1. 建仓后先设 TP = ±3 ATR； 
+# 2. 触碰 TP → 平掉一半，尾仓转入“追踪止损”模式； 
+# 3. 尾仓 stop 随价最高/最低点动态移动 2 ATR，直至被击穿或发生反手。
+            
+            # === 建仓 / 加仓 / 反手 ===
+            if sig != 0 and not locked:
+                if port["pos"] == 0: # 开仓
+                    self._open(port, sig, px, rv, i, floor, cap)
+                elif np.sign(sig) == np.sign(port["pos"]): # 同方向加仓
+                    self._add_position(port, sig, px, rv, i, floor, cap)
+               # _open/_add_position 调 _position_size()，size = min(risk_dollar/per_unit_risk, max_single_cap)
+
+                else: #pos!=0, sig给出和pos相反的信号 # 反向 → 平仓并反手
+                    self._reduce_or_reverse(port, sig, px, rv, i)
+                # 遇到反向信号时直接全部平仓，然后用新信号反手
+
+            #nav = port["cash"] + port["pos"] * px
+            nav = port["cash"] + port["pos"] * px
+            #nav = port["cash"] + port["pos"] * px
+            running_max = max(running_max, nav)
+
+            # --- 触发断路 ---
+            if not locked and nav <= running_max * (1 - self.max_drawdown): #
+                self._close(port, px)      # 全平
+                locked = True
+                cooldown = self.cooldown_period
+                locked_peak = running_max   # 仅作记录，不参与比较
+                running_max = nav           # ⬅ 新比较基准 → 现在 nav = running_max
+
+            # --- 冷却期 ---
+            if locked:
+                if cooldown > 0:
+                    cooldown -= 1
+                    log.append({"date": dt, "nav": nav, "pos": port["pos"], "signal": sig})
+                    continue  
+                else: #--- 恢复交易 ---
+                    locked = False
+                    running_max = nav
+            log.append({"date": dt, "nav": nav, "pos": port["pos"], "signal": sig})  # ← 新增 signal
+            # if locked and cooldown > 0:
+            #     cooldown -= 1
+            #     log.append({"date": dt, "nav": nav, "pos": port["pos"], "signal": sig})
+            #     continue  
+
+            # # --- 恢复交易 ---
+            # if locked and  cooldown == 0 and nav >= running_max * (1 - self.resume_drawdown):
+            #     locked = False
+            # log.append({"date": dt, "nav": nav, "pos": port["pos"], "signal": sig})  # ← 新增 signal
+        self.results = pd.DataFrame(log).set_index("date")
+
+        # ---------- 交易持仓时长统计 ----------
+        trades, pos, entry_date = [], 0, None
+        for dt, row in self.results.iterrows():
+            if pos == 0 and row["pos"] != 0:            # 开仓
+                pos, entry_date = row["pos"], dt
+            elif pos != 0 and row["pos"] == 0:          # 平仓
+                trades.append((entry_date, dt, (dt - entry_date).days))
+                pos = 0
+        if trades:                                      # 输出统计
+            lengths = [t[2] for t in trades]
+            print(f"平均持仓天数: {np.mean(lengths):.1f}  "
+                f"中位数: {np.median(lengths):.1f}  "
+                f"最短: {np.min(lengths)}  最长: {np.max(lengths)}")
+        else:
+            print("当前参数组合未产生完整交易记录。")
+
+        
+        return self.results
+
+
+    def _update_trail(self, port, px, rv):
+        if port["pos"] > 0:
+            port["trail"] = max(port["trail"], px)
+            port["stop"]  = max(port["stop"], port["trail"] - 2*rv)  # stop 只能上移
+        elif port["pos"] < 0:
+            port["trail"] = min(port["trail"], px)
+            port["stop"]  = min(port["stop"], port["trail"] + 2*rv)  # stop 只能下移
+
+    def _add_position(self, port, sig, px, rv, bar_idx, floor, cap):
+        # 新加一笔仓位，根据资金上限和最大亏损资金
+        size = self._position_size(px, rv, port["cash"], bar_idx, floor, cap) #port["cash"] * self.max_single是最多投多少资金，除以价格是最多持仓  /  最大亏损资金（port["cash"] *最大亏损比例）/价格=持仓，再除以2风控常数，不能多于这个持仓,二者最小
+        if size == 0:
+            return  # 没钱了不加
+        fee = px * size * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if sig > 0 else 0))
+        port["cash"] -= fee
+        port["pos"] += size if sig > 0 else -size  # 累加持仓
+        # 可选：加仓后，重设止损/止盈（比如按加权成本价/新ATR等）
+        port["stop"] = px - self.stoploss_atr * rv if port["pos"] > 0 else px + self.stoploss_atr * rv #stop是px加减2atr；tp是px加减3atr
+        port["tp"] = px + self.takeprofit_atr * rv if port["pos"] > 0 else px - self.takeprofit_atr * rv 
+        port["half_exit"] = False     # ← 补这一行
+
+    def _reduce_or_reverse(self, port, sig, px, rv, bar_idx):
+        # 简单实现：遇到反向信号时直接全部平仓，然后用新信号反手
+        self._close(port, px)
+        self._open(port, sig, px, rv, bar_idx)
+        # 如果你想“只减仓一半”，可以把加仓代码写成：
+        # reduce_size = min(abs(port["pos"]), self._position_size(px, port["cash"]))
+        # port["pos"] += reduce_size * np.sign(sig)
+        # （复杂处理可单独实现，有需要可以继续问）
+
+    # ---------- 开/平仓 ----------
+    def _open(self, port, sig, px, rv, bar_idx, floor, cap):
+        size = self._position_size(px, rv, port["cash"], bar_idx,floor, cap)
+        fee = px * size * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if sig > 0 else 0))
+        port["cash"] -= fee
+        port["pos"] = size if sig > 0 else -size
+
+        port["entry"]      = px                 # 记录建仓价 
+        port["half_exit"]  = False              # 尚未分批
+        port["trail"]      = px                 # trail 初值
+        port["stop"] = px - self.stoploss_atr * rv if sig > 0 else px + self.stoploss_atr * rv
+        port["tp"] = px + self.takeprofit_atr * rv if sig > 0 else px - self.takeprofit_atr * rv
+
+    def _close(self, port, px): 
+        value = port["pos"] * px
+        fee = abs(value) * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if port["pos"] > 0 else 0))
+        port["cash"] += value - fee
+        port.update({"pos":0, "stop":0, "tp":0, "half_exit":False, "trail":0})
+
+    # ---------- 绩效展示 ---------- 
+    # ② performance()：新增平仓点的索引并画散点
+    def performance (self,save_path: Path | None = None, plot_trades: bool = True):#(self, plot_trades: bool = True): save_path: Path | None = None, plot_trades: bool = True):
+        ret = self.results["nav"].pct_change().dropna()
+        ann_ret = (self.results["nav"].iloc[-1] / self.results["nav"].iloc[0]) ** (252 / len(ret)) - 1
+        sharpe = (ret.mean() / ret.std()) * np.sqrt(252) if ret.std() else 0
+        dd = (self.results["nav"].cummax() - self.results["nav"]) / self.results["nav"].cummax()
+        print(f"Ann return: {ann_ret:.2%};  Sharpe: {sharpe:.2f};  MaxDD: {dd.max():.2%}")
+
+        # -------- NAV 曲线 + Benchmark --------
+        nav_norm = self.results["nav"] / self.results["nav"].iloc[0]
+        bm_norm  = (self.price["price"].reindex(self.results.index)
+                            / self.price["price"].reindex(self.results.index).iloc[0])
+
+        fig, ax1 = plt.subplots(figsize=(12, 5))
+        ax1.plot(nav_norm, label="Strategy NAV", color="steelblue")
+        ax1.plot(bm_norm,  label="Benchmark",     color="gray", alpha=0.6)
+        ax1.set_ylabel("Normalized NAV", color="steelblue")
+        ax1.tick_params(axis="y", labelcolor="steelblue")
+
+        # -------- 交易标记 --------
+        if plot_trades:
+            long_idx   = self.results.index[self.results["signal"] ==  1]
+            short_idx  = self.results.index[self.results["signal"] == -1]
+            #exit_idx   = self.results.index[(self.results["pos"].shift() != 0) & (self.results["pos"] == 0)]
+            exit_idx = self.results.index[(self.results["pos"].shift(fill_value=0) != 0) & (self.results["pos"] == 0)]
+
+            ax1.scatter(long_idx,  nav_norm.loc[long_idx],  marker="^", color="green", s=90, label="Long entry")
+            ax1.scatter(short_idx, nav_norm.loc[short_idx], marker="v", color="red",   s=90, label="Short entry")
+            ax1.scatter(exit_idx,  nav_norm.loc[exit_idx],  marker="x", color="orange",s=90, label="Exit")
+
+        # -------- 持仓副轴 --------
+        ax2 = ax1.twinx()
+        ax2.fill_between(self.results.index, self.results["pos"], 0,
+                        color="lightgray", alpha=0.3, step="mid")
+        ax2.set_ylabel("Position (shares)", color="gray")
+        ax2.tick_params(axis="y", labelcolor="gray")
+# – 当柱子向上（>0）时代表净多头，柱子高度≈持有的多头手数； 
+# – 当柱子向下（<0）时代表净空头，其高度是空仓手数； 
+# – 没柱子（=0）表示空仓。 
+# 这样就能一眼看到每次进出场与 NAV 曲线的对应关系： 
+# 红/绿三角是建仓点，橙色 × 是全部平仓点，而灰色矩形则显示建仓后持仓在随后一段时间的持续、大小以及方向
+
+        # ======== ★ 重点：美化时间轴 ★ ========
+        # ① 只把「月初」设为主刻度（可换成 mdates.WeekdayLocator/byweekday=MO 等）
+        ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=3))   # 每 3 个月一个主刻度
+        # ② 日期格式：YYYY-MM
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        # ③ 旋转标签并右对齐，防止重叠
+        plt.setp(ax1.get_xticklabels(), rotation=45, ha='right')
+        # ④ 如果想进一步减标签，可以配合 MinorLocator 或直接 set_minor_formatter('')
+
+        # 合并图例并显示
+        h1, l1 = ax1.get_legend_handles_labels() 
+        ax1.legend(h1, l1, loc="upper left")
+        plt.title("Strategy NAV & Positions (Entries / Exits)")
+        plt.tight_layout()        # 自动调整边距，防止标签被截断
+        plt.show()
+
+        if save_path:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(save_path, dpi=120, bbox_inches="tight")
+            plt.close(fig)                   # 不弹窗
+        else:
+            plt.show()
+
+        # → 把三项指标返回
+        return ann_ret, sharpe, dd.max()
+
+if __name__ == "__main__":
+    np.random.seed(0)
+    df=pd.read_csv('weighted_return\Gold_benchmark_weights_return.csv')
+
+    daily_rets  = df['weighted_return_2']
+    daily_rets.index = pd.to_datetime(df['date'])
+    daily_rets.sort_index(inplace=True)              
+
+    strat = EnhancedTimingStrategy(daily_rets)
+    strat.calc_indicators()
+    strat.generate_signals()
+    strat.backtest()
+    strat.performance()   
