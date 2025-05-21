@@ -1,0 +1,76 @@
+def backtest(self):
+      running_max = self.initial_capital
+      locked = False
+      port = {"cash": self.initial_capital, "pos": 0, "stop": 0, "tp": 0,  "half_exit": False,  "trail": 0 }
+      log = []
+      for i, (dt, row) in enumerate(self.signals.iterrows()):
+          #print(row)
+          px, sig = row["price"], row["signal"]#, row["ATR"]
+          rv   = row['RV14']
+          #rv_pct   = row['RV14_pct']
+          floor= row['VOL_FLOOR']
+          cap  = row['VOL_CAP']
+          #回撤超过 40% 就清仓并锁仓，等回撤收复 10% 再解锁
+
+          # # ===  分批止盈：到 ±3×ATR 先平一半 ===
+          if port["pos"] != 0 and not port["half_exit"]:
+              reach_tp = (port["pos"]>0 and px >= port["tp"]) or (port["pos"]<0 and px <= port["tp"])
+              if reach_tp:
+                  half = abs(port["pos"]) // 2
+                  if half:                                  # 有整数手
+                      fee = px*half*(self.cost["c"]+self.cost["s"]+(self.cost["t"] if port["pos"]>0 else 0))
+                      port["cash"] += half*px - fee
+                      port["pos"]  += -half if port["pos"]>0 else  half
+                      port["half_exit"] = True
+                      port["trail"] = px # 追踪止损起点,把 trail 初始为当前价格
+
+
+          # ---------- ② 追踪止损 ----------
+          if port["pos"] != 0 and port["half_exit"]:
+              self._update_trail(port, px, rv) #更新stop
+
+          # ---------- ③ 止损平尾仓 ----------
+          if (port["pos"]>0 and px <= port["stop"]) or (port["pos"]<0 and px >= port["stop"]):
+              self._close(port, px) #若达到止损线 → 全平、手续费结算、当天禁止再反手
+              sig = 0 # 当天已平仓，后面不再建仓
+
+# 这样策略会： 
+# 1. 建仓后先设 TP = ±3 ATR； 
+# 2. 触碰 TP → 平掉一半，尾仓转入"追踪止损"模式； 
+# 3. 尾仓 stop 随价最高/最低点动态移动 2 ATR，直至被击穿或发生反手。
+          
+          # === 建仓 / 加仓 / 反手 ===
+          if sig != 0 and not locked:
+              if port["pos"] == 0: # 开仓
+                  self._open(port, sig, px, rv, i, floor, cap)
+              elif np.sign(sig) == np.sign(port["pos"]): # 同方向加仓
+                  self._add_position(port, sig, px, rv, i, floor, cap)
+             # _open/_add_position 调 _position_size()，size = min(risk_dollar/per_unit_risk, max_single_cap)
+
+              else: #pos!=0, sig给出和pos相反的信号 # 反向 → 平仓并反手
+                  self._reduce_or_reverse(port, sig, px, rv, i)
+              # 遇到反向信号时直接全部平仓，然后用新信号反手
+
+          #nav = port["cash"] + port["pos"] * px
+          nav = port["cash"] + port["pos"] * px
+          #nav = port["cash"] + port["pos"] * px
+          running_max = max(running_max, nav)
+
+          # --- 触发断路 ---
+          if not locked and nav <= running_max * (1 - self.max_drawdown): #
+              self._close(port, px)      # 全平
+              locked = True
+              locked_peak = running_max   # 仅作记录，不参与比较
+              running_max = nav           # ⬅ 新比较基准 → 现在 nav = running_max
+              
+          # --- 恢复交易 ---
+          if locked and nav >= running_max * (1 - self.resume_drawdown):
+              locked = False
+          log.append({"date": dt, "nav": nav, "pos": port["pos"], "signal": sig})  # ← 新增 signal
+      self.results = pd.DataFrame(log).set_index("date") 这个策略里面，是否可以把 # --- 触发断路 ---
+          if not locked and nav <= running_max * (1 - self.max_drawdown): #
+              self._close(port, px)      # 全平
+              locked = True去掉，直接放入# ---------- ③ 止损平尾仓 ----------
+          if (port["pos"]>0 and px <= port["stop"]) or (port["pos"]<0 and px >= port["stop"]):
+              self._close(port, px) #若达到止损线 → 全平、手续费结算、当天禁止再反手
+              sig = 0 # 当天已平仓，后面不再建仓里面一起做判断、
