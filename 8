@@ -74,3 +74,26 @@ def backtest(self):
           if (port["pos"]>0 and px <= port["stop"]) or (port["pos"]<0 and px >= port["stop"]):
               self._close(port, px) #若达到止损线 → 全平、手续费结算、当天禁止再反手
               sig = 0 # 当天已平仓，后面不再建仓里面一起做判断、
+
+
+cooldown_period = 5
+cooldown = 0
+
+for i, (dt, row) in enumerate(self.signals.iterrows()):
+    ...
+    # --- 熔断 ---
+    if not locked and nav <= running_max * (1 - self.max_drawdown):
+        self._close(port, px)
+        locked = True
+        cooldown = cooldown_period
+        locked_peak = running_max
+        running_max = nav
+    # --- 冷却期 ---
+    if locked and cooldown > 0:
+        cooldown -= 1
+        log.append({"date": dt, "nav": nav, "pos": port["pos"], "signal": sig})
+        continue
+    # --- 恢复交易 ---
+    if locked and cooldown == 0 and nav >= running_max * (1 - self.resume_drawdown):
+        locked = False
+    ...
