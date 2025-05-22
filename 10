@@ -1,0 +1,331 @@
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates         
+from pathlib import Path
+
+class EnhancedTimingStrategy:
+    def __init__(self, daily_returns: pd.Series):
+        self.price = self._to_price(daily_returns).rename("price").to_frame()
+        self.initial_capital = 1_000_000
+        self.max_single = 0.25      # Maximum position 30%
+        self.cost = {"c": 0.001, "s": 0.0003, "t": 0.001} 
+        self.max_drawdown=0.4
+        self.resume_drawdown=0.1
+        self.circuit_breaker=False
+        self.rsi_lookback=14
+
+        self.base_risk = 0.0025   # maximum  loss amount can be tolerated is 0.25% of NAV
+        self.stop_atr  = 3          #3std
+        self.warmup_bars = 10        # 前 10 减仓
+        self.warmup_bars = max(1, min(self.warmup_bars, len(self.price)//5))
+
+        self.RSI_pct_high=0.6
+        self.RSI_pct_low=0.4 
+        self.low_vol_low=0.4
+        self.high_vol_high=0.6
+        self.stoploss_atr=2
+        self.takeprofit_atr=2
+
+        self.cooldown_period = 5
+        self.pct_window=60
+
+    @staticmethod
+    def _to_price(r: pd.Series) -> pd.Series:
+        r = r.clip(-0.1, 0.1).replace(0, 1e-6)
+        return 100 * (1 + r).cumprod()
+
+    # ---------- indicators ----------
+    def calc_indicators(self):
+        df = self.price
+        df["EMA3"] = df["price"].ewm(span=3).mean()
+        df["EMA7"] = df["price"].ewm(span=7).mean()
+        df["EMA10"] = df["price"].ewm(span=10).mean()
+        df["EMA15"] = df["price"].ewm(span=15).mean()
+        df["EMA20"] = df["price"].ewm(span=20).mean()
+        df["EMA30"] = df["price"].ewm(span=30).mean()
+        df["EMA40"] = df["price"].ewm(span=40).mean()
+        df["EMA50"] = df["price"].ewm(span=50).mean()
+        delta = df["price"].diff()
+        gain, loss = delta.clip(lower=0), -delta.clip(upper=0)
+        rs = gain.rolling(self.rsi_lookback).mean() / (loss.rolling(self.rsi_lookback).mean() + 1e-9)
+        df["RSI"] = 100 - 100 / (1 + rs)
+        df["ATR"] = df["price"].diff().abs().rolling(14).mean()
+        df['RV14'] = (np.log(df["price"])).diff().rolling(14).std() # ret.rolling(14).std()
+        df['RV_pct']  = df['RV14'].rolling(self.pct_window).rank(pct=True)#60-day rolling window quantiles
+        df['VOL_FLOOR'] = df['RV14'].rolling(self.pct_window).quantile(0.20)
+        df['VOL_CAP']   = df['RV14'].rolling(self.pct_window).quantile(0.80)
+        df["RSI_pct"] = df["RSI"].rolling(self.pct_window).rank(pct=True)
+        self.df = df.dropna().copy()
+
+    # ---------- generate_signals ----------
+    def generate_signals(self):  
+        df = self.df.copy()
+        # ---- Volatility Percentile ----
+        low_vol  = df['RV_pct'] < self.low_vol_low #consensus area
+        high_vol = df['RV_pct'] > self.high_vol_high #divergence area
+        print(df['RV_pct'].max(), df['RV_pct'].min())
+
+        # ---- Trend  ----
+        df['trend']=np.where(df['EMA7']>df['EMA40']*0.995, 1, np.where(df['EMA7']<df['EMA40']*1.005, -1, 0))
+        
+        # ===== Momentum: RSI quantile =====
+        df["mom"] = np.select([df["RSI_pct"]>self.RSI_pct_high, df["RSI_pct"]<self.RSI_pct_low], [1, -1], 0) 
+        
+        # -------------
+        df["raw"] = np.where(df["trend"] == df["mom"], df["trend"], 0) 
+
+        # ------- reverse ------
+        turn_up = (df["raw"] == 1) & (df["EMA3"] < df["EMA20"])
+        turn_down   = (df["raw"] == -1) & (df["EMA3"] > df["EMA20"]) 
+
+        # ------- final ------
+
+        df["filt"] = np.select(
+                [ (df["raw"] ==  1) & low_vol,           
+                (df["raw"] == -1) & low_vol,        
+                high_vol & turn_down,                
+                high_vol & turn_up ],              
+                [ 1, -1,  -1, 1], 0) #[ 1, -1,  -1, 1] [ 1, -1,  1, -1]
+        df["signal"] = df["filt"].where(
+                df["filt"].shift(fill_value=0) != df["filt"], 0)
+
+
+        self.signals = df[["price", "signal", 'RV14', 'VOL_FLOOR', 'VOL_CAP']] 
+        print(df['signal'].value_counts())
+        print('backtest time:',self.signals.index[0])
+        return self.signals
+
+    # ---------- position ----------
+    def _position_size(self, px, rv, nav, bar_idx, floor, cap):
+
+        rv = np.clip(rv, floor, cap)
+
+        risk_frac   = self.base_risk
+        risk_dollar = nav * risk_frac
+
+        per_unit_risk = self.stop_atr * rv * px #Estimated loss per lot
+        if per_unit_risk == 0:
+            return 0
+
+        size_by_risk = risk_dollar / per_unit_risk #Amount of loss you can afford (0.25% of NAV) ÷ 1 unit loss = Number of units invested, i.e. size, shares
+        size_cap     = nav * self.max_single / px
+        return int(max(0, min(size_by_risk, size_cap)))
+
+    # ---------- backtest ----------
+    #T+0 
+    def backtest(self):
+        running_max = self.initial_capital
+        locked = False
+        port = {"cash": self.initial_capital, "pos": 0, "stop": 0, "tp": 0,  "half_exit": False,  "trail": 0 }
+        log = []
+        cooldown = 0
+        for i, (dt, row) in enumerate(self.signals.iterrows()):
+            px, sig = row["price"], row["signal"]#, row["ATR"]
+            rv   = row['RV14']
+            floor= row['VOL_FLOOR']
+            cap  = row['VOL_CAP']
+
+            # # ===  Take profit in batches: close half of the position when it reaches ±3×ATR ===
+            if port["pos"] != 0 and not port["half_exit"]:
+                reach_tp = (port["pos"]>0 and px >= port["tp"]) or (port["pos"]<0 and px <= port["tp"])
+                if reach_tp:
+                    half = abs(port["pos"]) // 2
+                    print("Take profit in batches")
+                    if half:                
+                        fee = px*half*(self.cost["c"]+self.cost["s"]+(self.cost["t"] if port["pos"]>0 else 0))
+                        port["cash"] += half*px - fee
+                        port["pos"]  += -half if port["pos"]>0 else  half
+                        port["half_exit"] = True
+                        port["trail"] = px # Trailing stop loss starting point, set trail to the current price
+
+
+            # ---------- Trailing Stop Loss----------
+            if port["pos"] != 0 and port["half_exit"]:
+                print("Trailing Stop Loss")
+                self._update_trail(port, px, rv) #更新stop
+
+            # ---------- Stop loss closing----------
+            if (port["pos"]>0 and px <= port["stop"]) or (port["pos"]<0 and px >= port["stop"]):
+                #print(port["stop"])
+                self._close(port, px) #If the stop loss line is reached → all positions are closed, commissions are settled, and no further reversals are allowed on the same day
+                sig = 0 # The position has been closed on the day and no position will be opened later
+                
+                print("Stop loss closing")
+
+            
+            # ===Opening / Adding / Reversing ===
+            if sig != 0 and not locked:
+                if port["pos"] == 0: 
+                    self._open(port, sig, px, rv, i, floor, cap)
+                    print("open")
+                elif np.sign(sig) == np.sign(port["pos"]): #Add positions in the same direction
+                    self._add_position(port, sig, px, rv, i, floor, cap)
+                    print('add')
+                else: #sig!=0, pos!=0, sig gives the opposite signal to pos # Reverse → Close the position and reverse
+                    print("reverse")
+                    self._reduce_or_reverse(port, sig, px, rv, i, floor, cap)
+                # When encountering a reverse signal, close all positions directly, and then use the new signal to reverse
+
+            nav = port["cash"] + port["pos"] * px
+            running_max = max(running_max, nav)
+
+            # --- tripping ---
+            if not locked and nav <= running_max * (1 - self.max_drawdown): #
+                print("tripping")
+                self._close(port, px)      # all close
+                locked = True
+                cooldown = self.cooldown_period
+                locked_peak = running_max   
+                running_max = nav           # new baseline nav = running_max
+
+            # --- lock period ---
+            if locked:
+                print("locked")
+                if cooldown > 0:
+                    cooldown -= 1
+                    log.append({"date": dt, "nav": nav, "pos": port["pos"], "signal": sig})
+                    continue  
+                else: 
+                    locked = False
+                    running_max = nav
+            log.append({"date": dt, "nav": nav, "pos": port["pos"], "signal": sig})  #
+        self.results = pd.DataFrame(log).set_index("date")
+
+        # ---------- Trading position holding time statistics ----------
+        trades, pos, entry_date = [], 0, None
+        for dt, row in self.results.iterrows():
+            if pos == 0 and row["pos"] != 0:            
+                pos, entry_date = row["pos"], dt
+            elif pos != 0 and row["pos"] == 0:          
+                trades.append((entry_date, dt, (dt - entry_date).days))
+                pos = 0
+        if trades:                                     
+            lengths = [t[2] for t in trades]
+            print(f"Average holding days: {np.mean(lengths):.1f}  "
+                f"median: {np.median(lengths):.1f}  "
+                f"shortest: {np.min(lengths)}  longest: {np.max(lengths)}")
+        else:
+            print("The current parameter combination does not generate a complete transaction record")    
+        return self.results
+
+    def _update_trail(self, port, px, rv):
+        if port["pos"] > 0:
+            port["trail"] = max(port["trail"], px)
+            port["stop"]  = max(port["stop"], port["trail"] - self.stoploss_atr*rv*px)  # stop 只能上移
+        elif port["pos"] < 0:
+            port["trail"] = min(port["trail"], px)
+            port["stop"]  = min(port["stop"], port["trail"] + self.stoploss_atr*rv*px)  # stop 只能下移
+
+    def _add_position(self, port, sig, px, rv, bar_idx, floor, cap):
+        # Add a new position, based on the capital limit and maximum loss capital
+        size = self._position_size(px, rv, port["cash"], bar_idx, floor, cap) #port["cash"] * self.max_single是最多投多少资金，除以价格是最多持仓  /  最大亏损资金（port["cash"] *最大亏损比例）/价格=持仓，再除以2风控常数，不能多于这个持仓,二者最小
+        if size == 0:
+            return  # No money, no add
+        fee = px * size * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if sig > 0 else 0))
+        # if sig > 0:                  # 做多
+        #     port["cash"] -= size * px
+        # else:                        # 做空
+        #     port["cash"] += size * px
+   
+        port["cash"] -= fee
+        port["pos"] += size if sig > 0 else -size  # Accumulated positions
+        # After adding positions, reset stop loss/take profit
+        port["stop"] = px - self.stoploss_atr * rv *px if port["pos"] > 0 else px + self.stoploss_atr * rv *px#stop是px加减2atr；tp是px加减3atr
+        port["tp"] = px + self.takeprofit_atr * rv*px if port["pos"] > 0 else px - self.takeprofit_atr * rv *px
+        port["half_exit"] = False  
+
+    def _reduce_or_reverse(self, port, sig, px, rv, bar_idx, floor, cap):
+        # When encountering a reverse signal, close all positions directly, and then use the new signal to reverse
+        self._close(port, px)
+        self._open(port, sig, px, rv, bar_idx, floor, cap)
+        # 如果“只减仓一半”，加仓代码写成：
+        # reduce_size = min(abs(port["pos"]), self._position_size(px, port["cash"]))
+        # port["pos"] += reduce_size * np.sign(sig)
+
+
+    # ---------- open----------
+    def _open(self, port, sig, px, rv, bar_idx, floor, cap):
+        size = self._position_size(px, rv, port["cash"], bar_idx,floor, cap)
+        fee = px * size * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if sig > 0 else 0))
+        # if sig > 0:                  # 做多
+        #     port["cash"] -= size * px
+        # else:                        # 做空
+        #     port["cash"] += size * px
+   
+        port["cash"] -= fee
+        port["pos"] = size if sig > 0 else -size
+
+        port["entry"]      = px                 # Record opening price
+        port["half_exit"]  = False              
+        port["trail"]      = px                 
+        port["stop"] = px - self.stoploss_atr * rv *px if sig > 0 else px + self.stoploss_atr * rv*px
+        port["tp"] = px + self.takeprofit_atr * rv *px if sig > 0 else px - self.takeprofit_atr * rv*px
+
+    def _close(self, port, px): 
+        value = port["pos"] * px
+        fee = abs(value) * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if port["pos"] > 0 else 0))
+        port["cash"] += value - fee
+        port.update({"pos":0, "stop":0, "tp":0, "half_exit":False, "trail":0})
+
+    # ---------- performance ---------- 
+
+    def performance (self,save_path: Path | None = None, plot_trades: bool = True):
+        ret = self.results["nav"].pct_change().dropna()
+        ann_ret = (self.results["nav"].iloc[-1] / self.results["nav"].iloc[0]) ** (252 / len(ret)) - 1
+        sharpe = (ret.mean() / ret.std()) * np.sqrt(252) if ret.std() else 0
+        dd = (self.results["nav"].cummax() - self.results["nav"]) / self.results["nav"].cummax()
+        print(f"Ann return: {ann_ret:.2%};  Sharpe: {sharpe:.2f};  MaxDD: {dd.max():.2%}")
+
+        # -------- NAV  + Benchmark --------
+        nav_norm = self.results["nav"] / self.results["nav"].iloc[0]
+        bm_norm  = (self.price["price"].reindex(self.results.index)
+                            / self.price["price"].reindex(self.results.index).iloc[0])
+
+        fig, ax1 = plt.subplots(figsize=(12, 5))
+        ax1.plot(nav_norm, label="Strategy NAV", color="steelblue")
+        ax1.plot(bm_norm,  label="Benchmark",     color="gray", alpha=0.6)
+        ax1.set_ylabel("Normalized NAV", color="steelblue")
+        ax1.tick_params(axis="y", labelcolor="steelblue")
+
+        # -------- marker --------
+        if plot_trades:
+            long_idx   = self.results.index[self.results["signal"] ==  1]
+            short_idx  = self.results.index[self.results["signal"] == -1]
+            exit_idx = self.results.index[(self.results["pos"].shift(fill_value=0) != 0) & (self.results["pos"] == 0)]
+
+            ax1.scatter(long_idx,  nav_norm.loc[long_idx],  marker="^", color="green", s=90, label="Long entry")
+            ax1.scatter(short_idx, nav_norm.loc[short_idx], marker="v", color="red",   s=90, label="Short entry")
+            ax1.scatter(exit_idx,  nav_norm.loc[exit_idx],  marker="x", color="orange",s=90, label="Exit")
+
+        # -------- Holding secondary axis --------
+        ax2 = ax1.twinx()
+        ax2.fill_between(self.results.index, self.results["pos"], 0,
+                        color="lightgray", alpha=0.3, step="mid")
+        ax2.set_ylabel("Position (shares)", color="gray")
+        ax2.tick_params(axis="y", labelcolor="gray")
+
+
+        # ======== ========
+        ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=3))   #One major scale every 3 months
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        plt.setp(ax1.get_xticklabels(), rotation=45, ha='right')
+
+        # Merge legend and display
+        h1, l1 = ax1.get_legend_handles_labels() 
+        ax1.legend(h1, l1, loc="upper left")
+        plt.title("Strategy NAV & Positions (Entries / Exits)")
+        plt.tight_layout()        
+        plt.show()
+
+        if save_path:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(save_path, dpi=120, bbox_inches="tight")
+            plt.close(fig)              
+        else:
+            plt.show()
+
+        # return
+        return ann_ret, sharpe, dd.max()
+        
