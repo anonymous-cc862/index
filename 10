@@ -1,3 +1,14 @@
+def _close(self, port, px): 
+    if port["pos"] > 0:  # 多头平仓
+        value = port["pos"] * px
+        fee = abs(value) * (self.cost["c"] + self.cost["s"] + self.cost["t"])
+        port["cash"] += value - fee
+    elif port["pos"] < 0:  # 空头平仓
+        value = abs(port["pos"]) * px
+        fee = value * (self.cost["c"] + self.cost["s"])  # 空头买回无需额外t成本
+        port["cash"] -= value + fee
+    
+    port.update({"pos":0, "stop":0, "tp":0, "half_exit":False, "trail":0})
 
 import pandas as pd
 import numpy as np
