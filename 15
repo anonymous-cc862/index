@@ -1,3 +1,10 @@
+# Convert raw slope to 1 (uptrend), -1 (downtrend), 0 (neutral)
+df["Slope7_numeric"] = 0 # Default to neutral
+df.loc[df["Slope7_raw"] > self.slope7_threshold, "Slope7_numeric"] = 1
+df.loc[df["Slope7_raw"] < -self.slope7_threshold, "Slope7_numeric"] = -1
+
+
+
 import pandas as pd
 import numpy as np
 from pathlib import Path # Added for type hinting in performance method
