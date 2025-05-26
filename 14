@@ -1,3 +1,100 @@
+是的，你的理解完全正确。
+
+---
+
+## 为什么要修改？
+
+回测逻辑上的『未来函数』问题不仅限于信号，实际上所有当天用来决策交易（如仓位大小、止损、止盈）的参数，都必须是**来自前一天或以前的数据**，不能使用当天的数据，否则会产生向前看的问题。
+
+在你的回测逻辑中，以下这些变量：
+
+* `rv` (realized volatility)
+* `floor`（波动率下限）
+* `cap`（波动率上限）
+
+都用于计算当天交易决策（如持仓大小），因此也应当与信号一样**向后移动一天**。
+
+---
+
+## 修改方式
+
+你应该将所有用于交易决策的变量向后平移一天：
+
+```python
+self.signals["signal_trade"] = self.signals["signal"].shift(1).fillna(0)
+self.signals["rv_trade"]     = self.signals["RV14"].shift(1).fillna(method='bfill')
+self.signals["floor_trade"]  = self.signals["VOL_FLOOR"].shift(1).fillna(method='bfill')
+self.signals["cap_trade"]    = self.signals["VOL_CAP"].shift(1).fillna(method='bfill')
+```
+
+---
+
+## 调整后的回测循环示例：
+
+```python
+# 将交易相关参数都用shift(1)提前一天准备好
+self.signals["signal_trade"] = self.signals["signal"].shift(1).fillna(0)
+self.signals["rv_trade"]     = self.signals["RV14"].shift(1).fillna(method='bfill')
+self.signals["floor_trade"]  = self.signals["VOL_FLOOR"].shift(1).fillna(method='bfill')
+self.signals["cap_trade"]    = self.signals["VOL_CAP"].shift(1).fillna(method='bfill')
+
+# 然后在回测循环中：
+for i, (dt, row) in enumerate(self.signals.iterrows()):
+    px    = row["price"]
+    sig   = row["signal_trade"]
+    rv    = row["rv_trade"]
+    floor = row["floor_trade"]
+    cap   = row["cap_trade"]
+
+    # 后续保持原逻辑不变...
+```
+
+---
+
+## 这样修改的好处：
+
+* **逻辑严谨，避免未来函数问题**：
+  所有交易参数都是**提前一天**准备好，并在当天使用，因此符合实际交易逻辑。
+
+* **提升回测的真实性和可靠性**：
+  这样回测出的结果更接近实盘表现，更有可信度。
+
+---
+
+## 总结修正后的代码段：
+
+完整清晰示例（推荐你直接插入回测函数开头）：
+
+```python
+def backtest(self):
+    # 明确提前一天生成交易相关变量
+    self.signals["signal_trade"] = self.signals["signal"].shift(1).fillna(0)
+    self.signals["rv_trade"]     = self.signals["RV14"].shift(1).fillna(method='bfill')
+    self.signals["floor_trade"]  = self.signals["VOL_FLOOR"].shift(1).fillna(method='bfill')
+    self.signals["cap_trade"]    = self.signals["VOL_CAP"].shift(1).fillna(method='bfill')
+
+    running_max = self.initial_capital
+    locked = False
+    port = {"cash": self.initial_capital, "pos": 0, "stop": 0, "tp": 0, 
+            "half_exit": False, "trail": 0, "max_entry": None, "min_entry": None}  
+    log = []
+    cooldown = 0
+    for i, (dt, row) in enumerate(self.signals.iterrows()):
+        px    = row["price"]
+        sig   = row["signal_trade"]
+        rv    = row["rv_trade"]
+        floor = row["floor_trade"]
+        cap   = row["cap_trade"]
+
+        # 以下的原有逻辑保持不变即可...
+```
+
+---
+
+## 结论：
+
+是的，不仅仅是信号，**所有交易决策的指标（rv, floor, cap）都应当使用前一天的数据**。
+这样才是一个**正确且可靠的回测框架**。
 
 你提出的这个策略代码在**逻辑实现上存在一个核心的错误**：
 
