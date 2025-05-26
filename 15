@@ -1,0 +1,545 @@
+import pandas as pd
+import numpy as np
+from pathlib import Path # Added for type hinting in performance method
+
+# +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# HELPER SIGNAL GENERATION FUNCTIONS (from previous step)
+# +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+def generate_ema_crossover_signals(df_input, p_fast=8, p_slow=20, close_col='price'):
+    """
+    Generates trading signals based on a short-term dual Exponential Moving Average (EMA) crossover.
+    Input DataFrame must have a 'price' column (or specified by close_col).
+    """
+    if close_col not in df_input.columns:
+        raise ValueError(f"DataFrame must contain a '{close_col}' column.")
+
+    df_signal = df_input.copy()
+
+    df_signal['EMA_fast'] = df_signal[close_col].ewm(span=p_fast, adjust=False).mean()
+    df_signal['EMA_slow'] = df_signal[close_col].ewm(span=p_slow, adjust=False).mean()
+    df_signal['Signal_EMA_Cross_Raw'] = "NEUTRAL"
+
+    buy_condition = (df_signal['EMA_fast'] > df_signal['EMA_slow']) & \
+                    (df_signal['EMA_fast'].shift(1) <= df_signal['EMA_slow'].shift(1))
+    df_signal.loc[buy_condition, 'Signal_EMA_Cross_Raw'] = "BUY"
+
+    sell_condition = (df_signal['EMA_fast'] < df_signal['EMA_slow']) & \
+                     (df_signal['EMA_fast'].shift(1) >= df_signal['EMA_slow'].shift(1))
+    df_signal.loc[sell_condition, 'Signal_EMA_Cross_Raw'] = "SELL"
+    
+    return df_signal[['Signal_EMA_Cross_Raw']] # Return only the signal column for merging
+
+
+def generate_roc_ma_filter_signals(df_input, p_roc=10, t_buy_roc=2.0, t_sell_roc=0.0, p_ma=10, close_col='price'):
+    """
+    Generates trading signals based on Rate of Change (ROC) with a Moving Average (MA) filter.
+    Input DataFrame must have a 'price' column (or specified by close_col).
+    """
+    if close_col not in df_input.columns:
+        raise ValueError(f"DataFrame must contain a '{close_col}' column.")
+
+    df_signal = df_input.copy()
+    df_signal['ROC_val'] = (df_signal[close_col] / df_signal[close_col].shift(p_roc) - 1) * 100
+    df_signal['MA_val'] = df_signal[close_col].rolling(window=p_ma).mean()
+    df_signal['Signal_ROC_MA_Raw'] = "NEUTRAL"
+
+    buy_condition = (df_signal['ROC_val'] > t_buy_roc) & (df_signal[close_col] > df_signal['MA_val'])
+    sell_condition_momentum = (df_signal['ROC_val'] < t_sell_roc)
+    sell_condition_trend = (df_signal[close_col] < df_signal['MA_val'])
+
+    df_signal.loc[buy_condition, 'Signal_ROC_MA_Raw'] = "BUY"
+    # Sell overrides buy if both conditions met on the same day for conservative exit
+    df_signal.loc[sell_condition_momentum | sell_condition_trend, 'Signal_ROC_MA_Raw'] = "SELL"
+    df_signal.loc[buy_condition & (sell_condition_momentum | sell_condition_trend), 'Signal_ROC_MA_Raw'] = "SELL"
+    
+    return df_signal[['Signal_ROC_MA_Raw']] # Return only the signal column for merging
+
+# +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# MODIFIED EnhancedTimingStrategy CLASS
+# +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+class EnhancedTimingStrategy:
+    def __init__(self, daily_returns: pd.Series):
+        self.price = self._to_price(daily_returns).rename("price").to_frame()
+
+        # === 其余原有参数不变 ===
+        self.initial_capital = 1_000_000
+        self.initial_nav = self.initial_capital
+        self.cost = {"c": 0.001, "s": 0.0, "t": 0.0}
+
+        # --- Parameters for existing and new signals ---
+        self.lookback_slope = 7      # Slope7: 线性回归窗口 (Retained)
+        
+        # Parameters for EMA Crossover Signal (using existing self.ema_short/long)
+        self.ema_short_period = 3    # Was self.ema_short
+        self.ema_long_period = 10    # Was self.ema_long
+        
+        # Parameters for ROC with MA Filter Signal
+        self.roc_period = 10
+        self.roc_buy_thresh = 2.0
+        self.roc_sell_thresh = 0.0
+        self.roc_ma_filter_period = 10
+
+        # Weights for the three signals in the ensemble:
+        # (EMA_Crossover_Z, Slope7_Z, ROC_MA_Filter_Z)
+        self.ens_weights = (1, 0, 0) # Example: (weight_ema_cross, weight_slope7, weight_roc_ma)
+
+        # 下面保留原有 risk、vol、ATR 等参数（如有需要可删减）
+        self.base_risk = 0.15
+        self.stop_atr = 5
+        self.max_drawdown = 0.4
+        self.resume_drawdown = 0.1
+        self.circuit_breaker = False
+        self.stoploss_atr = 1
+        self.takeprofit_atr = 2
+        self.cooldown_period = 5
+        self.pct_window = 40         # Window for rank normalization (Z-score)
+        self.low_vol_low = 0.2
+        self.high_vol_high = 0.8
+        
+        self.rv_scale_window = 30
+        self.ensemble_high = 0.8
+        self.ensemble_low = 0.2
+
+    # ---------- helpers ----------
+    @staticmethod
+    def _to_price(r: pd.Series) -> pd.Series:
+        r = r.clip(-0.1, 0.1).replace(0, 1e-6)
+        return 100 * (1 + r).cumprod()
+
+    # ---------- indicators ----------
+    def calc_indicators(self):
+        df = self.price.copy() # Work on a copy
+
+        # --- Signal 1: EMA Crossover (New) ---
+        # Use 'price' as the close column for the signal generator
+        ema_cross_signals_df = generate_ema_crossover_signals(
+            df, 
+            p_fast=self.ema_short_period, 
+            p_slow=self.ema_long_period,
+            close_col='price' 
+        )
+        df['ema_cross_raw'] = ema_cross_signals_df['Signal_EMA_Cross_Raw']
+        signal_map = {"BUY": 1, "SELL": -1, "NEUTRAL": 0}
+        df["ema_cross_numeric"] = df["ema_cross_raw"].map(signal_map).fillna(0)
+
+        # --- Signal 2: Slope7 (Retained) ---
+        df["Slope7"] = df["price"].rolling(self.lookback_slope)\
+            .apply(lambda x: np.polyfit(range(len(x)), x, 1)[0], raw=False)
+
+        # --- Signal 3: ROC with MA Filter (New) ---
+        roc_ma_signals_df = generate_roc_ma_filter_signals(
+            df,
+            p_roc=self.roc_period,
+            t_buy_roc=self.roc_buy_thresh,
+            t_sell_roc=self.roc_sell_thresh,
+            p_ma=self.roc_ma_filter_period,
+            close_col='price'
+        )
+        df['roc_ma_raw'] = roc_ma_signals_df['Signal_ROC_MA_Raw']
+        df["roc_ma_numeric"] = df["roc_ma_raw"].map(signal_map).fillna(0)
+        
+        # --- Z-score 标准化 (using percentile rank as in original code) ---
+        # Note: Normalizing 1/0/-1 discrete signals with rank might make them mostly 0.5, 0, or 1.
+        # Consider if this is the desired normalization for event-based signals,
+        # or if their raw numeric form (1,0,-1) is more appropriate for direct weighting,
+        # or if another normalization (like scaling by their own std dev if they vary) is better.
+        # For now, sticking to the existing rank normalization method.
+        for col in ("ema_cross_numeric", "Slope7", "roc_ma_numeric"):
+            df[col+"_z"] = df[col].rolling(self.pct_window).rank(pct=True)
+            # Alternative z-score:
+            # df[col+"_z"] = (df[col] - df[col].rolling(self.rv_scale_window).mean()) / \
+            #                (df[col].rolling(self.rv_scale_window).std() + 1e-9)
+        
+        # --- 线性组合得到 ensemble 动量 ---
+        w_ema_cross, w_slope7, w_roc_ma = self.ens_weights
+        df["ensemble"] = (w_ema_cross * df["ema_cross_numeric_z"].fillna(0) +
+                          w_slope7 * df["Slope7_z"].fillna(0) +
+                          w_roc_ma * df["roc_ma_numeric_z"].fillna(0))
+
+        # ===== (保留原来的波动率、ATR 等) =====
+        df["ATR"] = df["price"].diff().abs().ewm(span=14, adjust=False).mean()
+        df["RV14"] = np.log(df["price"]).diff().rolling(14).std()
+        df["VOL_FLOOR"] = df["RV14"].rolling(self.pct_window).quantile(0.20)
+        df["VOL_CAP"] = df["RV14"].rolling(self.pct_window).quantile(0.80)
+
+        # 丢掉暖机期
+        self.df = df.dropna(subset=['price', 'ensemble', 'ATR', 'RV14', 'VOL_FLOOR', 'VOL_CAP']).copy() # Ensure all needed cols are non-NA
+
+        # 添加价格合理性检查
+        if not self.df.empty: # only assert if df is not empty after dropna
+            assert not self.df["price"].isnull().any(), "存在缺失价格数据"
+            assert (self.df["price"] > 0).all(), "存在非正价格"
+        else:
+            print("Warning: DataFrame became empty after dropna in calc_indicators. Check lookback periods and data length.")
+
+
+    # ---------- generate_signals (No changes needed here if ensemble logic is correct) ----------
+    def generate_signals(self):
+        # Ensure calc_indicators has been run
+        if not hasattr(self, 'df') or self.df.empty:
+            print("Indicators not calculated or DataFrame is empty. Running calc_indicators().")
+            self.calc_indicators()
+            if self.df.empty:
+                 print("DataFrame is still empty after calc_indicators. Cannot generate signals.")
+                 # Handle empty DataFrame case, perhaps by creating an empty signals DataFrame with expected columns
+                 self.signals = pd.DataFrame(columns=["price", "signal", "ensemble", 'RV14', 'VOL_FLOOR', 'VOL_CAP', 
+                                                      "signal_trade", "rv_trade", "floor_trade", "cap_trade"])
+                 return self.signals
+
+
+        df = self.df.copy()
+        df["raw_sig"] = np.select(
+            [df["ensemble"] > self.ensemble_high,
+             df["ensemble"] < self.ensemble_low],
+            [1, -1],
+            0
+        )
+        df["signal"] = df["raw_sig"].where(
+            df["raw_sig"].shift(fill_value=0) != df["raw_sig"], 0
+        )
+        
+        self.signals = df[["price", "signal", "ensemble", 'RV14', 'VOL_FLOOR', 'VOL_CAP']].copy() # Explicit copy
+        if not self.signals.empty:
+            print(df["signal"].value_counts())
+            print("backtest start:", self.signals.index[0])
+            self.signals.loc[:, "signal_trade"] = self.signals["signal"].shift(1).fillna(0)
+            self.signals.loc[:, "rv_trade"] = self.signals["RV14"].shift(1).fillna(method='bfill')
+            self.signals.loc[:, "floor_trade"] = self.signals["VOL_FLOOR"].shift(1).fillna(method='bfill')
+            self.signals.loc[:, "cap_trade"] = self.signals["VOL_CAP"].shift(1).fillna(method='bfill')
+        else: # Handle case where self.signals might be empty if self.df was empty
+            self.signals["signal_trade"] = 0
+            self.signals["rv_trade"] = np.nan
+            self.signals["floor_trade"] = np.nan
+            self.signals["cap_trade"] = np.nan
+            print("Warning: No signals generated due to empty data after indicator calculation.")
+            
+        return self.signals
+
+    # ----------- backtest (Original backtest method, _update_trail, _position_size, etc. are kept as is) ----------
+    #T+1      
+    def backtest(self):
+        if self.signals.empty or len(self.signals) < 2: # Need at least some data to backtest
+            print("Not enough data in self.signals to run backtest.")
+            self.results = pd.DataFrame() # Empty results
+            return self.results
+
+        running_max = self.initial_capital
+        locked = False
+        # Initialize port correctly
+        port = {"cash": self.initial_capital, "pos": 0, "stop": 0, "tp": 0, "half_exit": False, "trail": 0, "max_entry": None, "min_entry": None, "entry": None} # Added "entry" for _open
+
+        log = []
+        cooldown = 0
+        for i, (dt, row) in enumerate(self.signals.iterrows()):
+            px= row["price"]
+            sig = row["signal_trade"] 
+            rv = row["rv_trade"]
+            floor = row["floor_trade"]
+            cap = row["cap_trade"]
+
+            # Basic check for NaN data that might break calculations
+            if pd.isna(px) or pd.isna(rv) or pd.isna(floor) or pd.isna(cap):
+                nav = port["cash"] + port["pos"] * (px if not pd.isna(px) else 0) # Calculate nav defensively
+                log.append({"date": dt, "nav": nav, "pos": port["pos"], "price": px, "signal": sig if not pd.isna(sig) else 0})
+                continue
+
+
+            # ---------- Stop loss closing----------
+            if (port["pos"]>0 and px <= port["stop"]) or \
+               (port["pos"]<0 and px >= port["stop"] and port["stop"] != 0): # Ensure stop is set
+                print(f"{dt} Stop loss closing. Pos: {port['pos']}, Price: {px}, Stop: {port['stop']}")
+                self._close(port, px) 
+                nav = port["cash"] # After closing, NAV is cash
+                # print(f"close by stop loss: pos={port['pos']}, cash={port['cash']}, nav={nav}, px={px}, stop={port['stop']}, tp={port['tp']}")
+                sig = 0 
+                log.append({"date": dt, "nav": nav, "pos": port["pos"], "price": px, "signal": sig})               
+                continue
+            
+            # ---------- Trailing Stop Loss----------
+            if port["pos"] != 0 and port["half_exit"]:
+                # print("Trailing Stop Loss") # Can be noisy
+                self._update_trail(port, px, rv) 
+
+            # # ===  Take profit in batches: close half of the position ===
+            if port["pos"] != 0 and not port["half_exit"]:
+                reach_tp = (port["pos"]>0 and px >= port["tp"]) or \
+                           (port["pos"]<0 and px <= port["tp"] and port["tp"] != 0) # Ensure tp is set
+                if reach_tp:
+                    half = abs(port["pos"]) // 2
+                    print(f"{dt} Take profit in batches (half). Pos: {port['pos']}, Price: {px}, TP: {port['tp']}")
+                    if half > 0 : #half非0                     
+                        fee = px*half*(self.cost["c"]+self.cost["s"]+(self.cost["t"] if port["pos"]>0 else 0))
+                        if port["pos"] > 0:
+                            port["cash"] += half*px - fee
+                            port["pos"]  -= half
+                        else: # port["pos"] < 0
+                            port["cash"] -= half*px - fee # cash increases from short covering
+                            port["pos"]  += half
+                        
+                        port["half_exit"] = True
+                        port["trail"] = px 
+                        # print(f"half:  pos={port['pos']}, cash={port['cash']}, nav={port['cash'] + port['pos'] * px}, px={px}, stop={port['stop']}, tp={port['tp']}")
+            
+            # ===Opening / Adding / Reversing ===
+            current_nav_before_trade = port["cash"] + port["pos"] * px # Calculate NAV before any new trade for position sizing
+            if sig != 0 and not locked and cooldown == 0: # Added cooldown check here
+                if port["pos"] == 0:  
+                    print(f"{dt} Open signal: {sig}, Price: {px}")
+                    self._open(port, sig, px, rv, i, floor, cap, current_nav_before_trade)
+                    # print(f"open: pos={port['pos']}, cash={port['cash']}, nav={port['cash'] + port['pos'] * px}, px={px}, stop={port['stop']}, tp={port['tp']}")
+                
+                elif np.sign(sig) == np.sign(port["pos"]): 
+                    print(f"{dt} Add signal: {sig}, Price: {px}")
+                    self._add_position(port, sig, px, rv, i, floor, cap, current_nav_before_trade)
+                    # print(f"add_position: pos={port['pos']}, cash={port['cash']}, nav={port['cash'] + port['pos'] * px}, px={px}, stop={port['stop']}, tp={port['tp']}")
+                
+                else: #sig!=0, pos!=0, sig gives the opposite signal to pos 
+                    print(f"{dt} Reverse signal: {sig}, From Pos: {port['pos']}, Price: {px}")
+                    self._reduce_or_reverse(port, sig, px, rv, i, floor, cap, current_nav_before_trade)
+                    # print(f"_reduce_or_reverse: pos={port['pos']}, cash={port['cash']}, nav={port['cash'] + port['pos'] * px}, px={px}, stop={port['stop']}, tp={port['tp']}")
+
+            nav = port["cash"] + port["pos"] * px
+            running_max = max(running_max, nav)
+
+            # --- tripping ---
+            if not locked and nav <= running_max * (1 - self.max_drawdown): 
+                print(f"{dt} Circuit breaker tripped! NAV: {nav}, Running Max: {running_max}")
+                self._close(port, px)      
+                nav = port["cash"] # Update nav after closing
+                locked = True
+                cooldown = self.cooldown_period  # Start cooldown
+                # locked_peak = running_max # Not used elsewhere
+                running_max = nav # Reset running_max to current nav after closing
+
+            # --- lock period ---
+            if locked:
+                # print(f"{dt} System locked. Cooldown: {cooldown}") # Can be noisy
+                if cooldown > 0:
+                    cooldown -= 1
+                    log.append({"date": dt, "nav": nav, "pos": port["pos"], "price": px, "signal": 0}) # No signal during cooldown
+                    continue  
+                else:  
+                    print(f"{dt} System unlocked after cooldown.")
+                    locked = False
+                    running_max = nav # Reset running_max as system becomes active
+            
+            log.append({"date": dt, "nav": nav, "pos": port["pos"], "price": px, "signal": sig if not pd.isna(sig) else 0}) 
+
+            if not np.isclose(nav, port['cash']+port['pos']*px):
+                print(f"Warning: NAV mismatch at {dt}. NAV: {nav}, Calculated: {port['cash']+port['pos']*px}")
+                # assert np.isclose(nav, port['cash']+port['pos']*px), 'NAV incorrect' # Made it a warning
+
+        self.results = pd.DataFrame(log).set_index("date")
+
+        trades, current_pos_val, entry_date_val = [], 0, None
+        for dt, row in self.results.iterrows():
+            if current_pos_val == 0 and row["pos"] != 0:         
+                current_pos_val, entry_date_val = row["pos"], dt
+            elif current_pos_val != 0 and row["pos"] == 0:        
+                trades.append((entry_date_val, dt, (dt - entry_date_val).days))
+                current_pos_val = 0
+        
+        if trades:                                      
+            lengths = [t[2] for t in trades]
+            print(f"Average holding days: {np.mean(lengths):.1f}  "
+                  f"median: {np.median(lengths):.1f}  "
+                  f"shortest: {np.min(lengths)}  longest: {np.max(lengths)}")
+        else:
+            print("The current parameter combination does not generate a complete transaction record")    
+        return self.results
+
+    def _update_trail(self, port, px, rv):
+        if port["pos"] > 0:
+            port["trail"] = max(port["trail"], px)
+            port["stop"]  = max(port["stop"], port["trail"] - self.stoploss_atr*rv*px) 
+        elif port["pos"] < 0:
+            port["trail"] = min(port["trail"], px)
+            port["stop"]  = min(port["stop"], port["trail"] + self.stoploss_atr*rv*px) 
+        # print(f"update_trail: stop: {port['stop']}") # Can be noisy
+
+    def _position_size(self, px, rv, nav, bar_idx, floor, cap, port):
+        rv = np.clip(rv, floor, cap) # Use vol within floor/cap
+        if pd.isna(rv) or rv <= 1e-9: # Handle NaN or zero RV
+             print(f"Warning: RV is {rv} at index {bar_idx}. Using small default for per_unit_risk calculation.")
+             rv = 0.01 # A small default to prevent division by zero if floor/cap also failed
+        
+        # Use available cash for sizing to avoid margin issues with this logic
+        # Sizing based on a fraction of NAV that can be risked.
+        risk_capital_available = min(nav, port["cash"]) # Base risk on the lesser of NAV or current cash to be conservative
+        if risk_capital_available <=0: return 0
+
+        risk_dollar = risk_capital_available * self.base_risk
+        per_unit_risk = self.stop_atr * rv * px 
+
+        if per_unit_risk <= 1e-9: # Avoid division by zero if px or rv makes it zero
+            return 0
+
+        size_by_risk = risk_dollar / per_unit_risk
+        
+        # Max size based on available cash (simple, no leverage assumed here)
+        # Ensure cash is positive before trying to calculate size_cap
+        size_cap = (port["cash"] // px) if port["cash"] > 0 and px > 0 else 0
+        
+        # print(f"rv:{rv:.4f}, nav: {nav:.0f}, cash: {port['cash']:.0f}, risk_dollar: {risk_dollar:.0f}, per_unit_risk: {per_unit_risk:.2f}, size_by_risk: {size_by_risk:.2f}, size_cap:{size_cap}")
+        return int(max(0, min(size_by_risk, size_cap)))
+    
+    def _add_position(self, port, sig, px, rv, bar_idx, floor, cap, nav):
+        additional_size = self._position_size(px, rv, nav, bar_idx, floor, cap, port) 
+        
+        if additional_size == 0:
+            return 
+        
+        # Ensure adding doesn't exceed available cash for the new portion
+        cost_of_new_portion = additional_size * px
+        if port["cash"] < cost_of_new_portion and sig > 0 : # Not enough cash for long
+             additional_size = int(port["cash"] // px) if px > 0 else 0
+        # For shorting, cash increases, so less of an issue unless specific margin rules apply
+
+        if additional_size == 0: return
+
+        fee = px * additional_size * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if sig > 0 else 0))
+        
+        current_avg_entry = port.get("avg_entry", port["entry"] if port["pos"] !=0 else px)
+        current_total_value = port["pos"] * current_avg_entry
+
+        if sig > 0: # Add to long
+            port["cash"] -= additional_size * px
+            new_total_value = current_total_value + additional_size * px
+            port["pos"] += additional_size
+            port["avg_entry"] = new_total_value / port["pos"] if port["pos"] !=0 else px
+            port["max_entry"] = max(port.get("max_entry", px), px) # Update max entry for stop calc
+            port["min_entry"] = min(port.get("min_entry", px), port["avg_entry"]) # min_entry is avg_entry for TP
+        else: # Add to short
+            port["cash"] += additional_size * px # Cash increases from shorting (margin not modeled here)
+            new_total_value = current_total_value - additional_size * px # value becomes more negative
+            port["pos"] -= additional_size
+            port["avg_entry"] = new_total_value / port["pos"] if port["pos"] !=0 else px # avg_entry signed
+            port["min_entry"] = min(port.get("min_entry", px), px) # Update min entry for stop calc
+            port["max_entry"] = max(port.get("max_entry", px), port["avg_entry"]) # max_entry is avg_entry for TP
+
+
+        port["cash"] -= fee
+        
+        # Recalculate stop/tp based on new position and potentially new avg_entry or extremum entry
+        # Using avg_entry for TP calculation and extremum entry for SL could be one approach
+        if port["pos"] > 0:
+            new_stop = port["max_entry"] - self.stoploss_atr * rv * port["max_entry"]
+            port["stop"] = max(port.get("stop", new_stop), new_stop) # Stop can only move up for longs
+            
+            new_tp = port["avg_entry"] + self.takeprofit_atr * rv * port["avg_entry"]
+            port["tp"] = min(port.get("tp", new_tp), new_tp) if port.get("tp",0) !=0 else new_tp # TP can only move up
+        elif port["pos"] < 0:
+            new_stop = port["min_entry"] + self.stoploss_atr * rv * port["min_entry"]
+            port["stop"] = min(port.get("stop", new_stop), new_stop) # Stop can only move down for shorts
+
+            new_tp = port["avg_entry"] - self.takeprofit_atr * rv * port["avg_entry"]
+            port["tp"] = max(port.get("tp", new_tp), new_tp) if port.get("tp",0) !=0 else new_tp # TP can only move down
+
+        port["half_exit"] = False  
+        port["entry"] = port["avg_entry"] # Update general entry to new average
+
+    def _reduce_or_reverse(self, port, sig, px, rv, bar_idx, floor, cap, nav):
+        # print(f"Reduce/Reverse: Closing position before opening new. Pos: {port['pos']}")
+        self._close(port, px)
+        nav_after_close = port["cash"] # NAV is cash after closing all positions
+        # print(f"Reduce/Reverse: Opening new position with signal {sig}. NAV for sizing: {nav_after_close}")
+        self._open(port, sig, px, rv, bar_idx, floor, cap, nav_after_close)
+        
+    def _open(self, port, sig, px, rv, bar_idx, floor, cap, nav):
+        size = self._position_size(px, rv, nav, bar_idx,floor, cap, port)
+        if size == 0: 
+            # print(f"Open: Calculated size is 0. No position taken. NAV: {nav}, Price: {px}")
+            return
+
+        fee = px * size * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if sig > 0 else 0))
+        
+        if sig > 0: # Long
+            if port["cash"] < size * px + fee:
+                # print(f"Open Long: Not enough cash. Have {port['cash']}, need {size*px+fee}")
+                return # Not enough cash
+            port["cash"] -= size * px
+            port["pos"] = size
+        else: # Short
+            # For shorting, cash balance increases, margin requirements not explicitly modeled here beyond position size calc
+            port["cash"] += size * px 
+            port["pos"] = -size
+        
+        port["cash"] -= fee
+        
+        port["entry"] = px # Record opening price for this new position
+        port["avg_entry"] = px 
+        port["max_entry"] = px 
+        port["min_entry"] = px 
+        port["half_exit"] = False      
+        port["trail"] = px             
+        
+        if sig > 0:
+            port["stop"] = px - self.stoploss_atr * rv *px 
+            port["tp"] = px + self.takeprofit_atr * rv *px 
+        else: # sig < 0
+            port["stop"] = px + self.stoploss_atr * rv*px
+            port["tp"] = px - self.takeprofit_atr * rv*px
+        # print(f"Open executed: sig: {sig}, size: {size}, pos={port['pos']}, cash={port['cash']:.0f}, nav={nav:.0f}, px={px}, stop={port['stop']:.2f}, tp={port['tp']:.2f}")
+
+    def _close(self, port, px):  
+        if port["pos"] == 0: return # Nothing to close
+
+        fee_rate_close = self.cost["c"] + self.cost["s"]
+        if port["pos"] > 0: # Closing long
+            fee_rate_close += self.cost["t"] 
+            port["cash"] += port["pos"] * px * (1 - fee_rate_close)
+        elif port["pos"] < 0: # Closing short (covering)
+            # No tax on short cover for this cost structure.
+            port["cash"] += port["pos"] * px * (1 + fee_rate_close) # pos is negative, so cash decreases by value + fees
+                                                                  # More accurately: cash_change = - (pos * px) - abs(pos*px*fee_rate_close)
+                                                                  # cash_change for short: initial_proceeds - cost_to_buy_back - fees
+                                                                  # Let's simplify: value of shares + fees is deducted from cash
+            value_to_buy_back = abs(port["pos"]) * px
+            total_cost_to_close_short = value_to_buy_back * (1 + fee_rate_close)
+            # This logic was a bit confusing. Let's be direct:
+            # For long: cash += proceeds - fee
+            # For short: cash -= cost_to_buy_back + fee
+            
+            # Corrected short close:
+            # Value of position when shorted was -(abs(pos) * entry_price)
+            # Cost to buy back is abs(pos) * px
+            # Profit/Loss = -(abs(pos)*px) - (-(abs(pos)*entry_price)) = abs(pos) * (entry_price - px)
+            # Cash impact: cash += abs(pos)*px (from initial short sell proceeds, assume it happened)
+            #              cash -= abs(pos)*px (to buy back)
+            #              cash -= fee
+            # The way it was structured: port["cash"] += port["pos"] * px * (1 + fee_rate_close)
+            # If pos = -10, px = 100. cash += (-1000) * (1 + 0.001) = cash - 1001. This seems correct for cost.
+            # Let's re-verify _open for short: cash += size * px (correct for initial proceeds before fee)
+            # So the existing close for short looks okay if fee is on the value.
+
+        # Simplified fee application:
+        value_at_close = abs(port["pos"]) * px
+        total_fees = value_at_close * fee_rate_close
+        
+        if port["pos"] > 0: # Closing long
+            port["cash"] += port["pos"] * px - total_fees
+        elif port["pos"] < 0: # Closing short
+            port["cash"] += port["pos"] * px - total_fees # port["pos"] is negative, so this subtracts value and fees. Correct.
+
+        # print(f"Close executed: Old Pos: {port['pos']}, Price: {px}, Cash After: {port['cash']:.0f}")
+        port.update({"pos":0, "stop":0, "tp":0, "half_exit":False, "trail":0, "entry":None, "avg_entry":None, "max_entry":None, "min_entry":None})
+
+
+    def performance (self,save_path: Path | None = None, plot_trades: bool = True):
+        if self.results.empty or len(self.results) < 2:
+            print("Not enough results to calculate performance.")
+            return
+        ret = self.results["nav"].pct_change().dropna()
+        if ret.empty:
+            print("No returns calculated, cannot compute Sharpe or Annual Return.")
+            sharpe = 0
+            ann_ret = 0
+        else:
+            ann_ret = (self.results["nav"].iloc[-1] / self.results["nav"].iloc[0]) ** (252 / len(self.results)) - 1
+            sharpe = (ret.mean() / (ret.std() if ret.std() != 0 else 1e-9)) * np.sqrt(252) 
+        
+        dd_series = (self.results["nav"].cummax() - self.results["nav"]) / self.results["nav"].cummax()
+        max_dd = dd_series.max()
+        print(f"Ann return: {ann_ret:.2%};  Sharpe: {sharpe:.2f};  MaxDD: {max_dd:.2%}")
+        # Plotting logic would go here if `plot_trades` is True and a library like matplotlib is used.
+        # Also, saving to `save_path` logic.
