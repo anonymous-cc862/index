@@ -1,3 +1,100 @@
+你提出的这个策略代码在**逻辑实现上存在一个核心的错误**：
+
+---
+
+## 核心问题
+
+你当前的实现中，使用的是当日收盘价（Close Price）计算出信号后，**同一天立即执行交易**（也就是所谓的T+0回测模式）。
+在实际交易环境中，正常的策略逻辑是：
+
+1. **在交易日结束后**，利用当天闭市后的数据（Close Price）计算出买卖信号；
+2. 在**下一个交易日开盘**执行该信号（即 T+1 模式）。
+
+你现在的代码里：
+
+```python
+for i, (dt, row) in enumerate(self.signals.iterrows()):
+    px, sig = row["price"], row["signal"]
+```
+
+这里的 `px` 和 `sig` 都是在**同一天同时获得**的，这意味着你是**用未来数据进行交易决策**，这在真实回测中是不允许的，会显著高估策略表现。
+
+---
+
+## 如何修正？
+
+修正的方法是明确区分出**信号日**和**交易执行日**：
+
+* 第一天（信号日）：使用当天闭市数据计算出信号；
+* 第二天（交易日）：使用第二天的价格执行昨天产生的信号。
+
+因此，你需要修改回测的逻辑，将信号向后平移一天：
+
+```python
+# === 修改回测信号 ===
+self.signals["signal_trade"] = self.signals["signal"].shift(1).fillna(0)
+```
+
+然后，回测交易循环应使用修改后的信号执行交易：
+
+```python
+for i, (dt, row) in enumerate(self.signals.iterrows()):
+    px = row["price"]                # 当天价格，用于交易执行
+    sig = row["signal_trade"]        # 使用前一天产生的信号
+```
+
+---
+
+## 完整示意修改（明确指出如何修改）：
+
+你可以简单地在回测函数（`backtest`）前插入：
+
+```python
+self.signals["signal_trade"] = self.signals["signal"].shift(1).fillna(0)
+```
+
+再修改回测循环：
+
+```python
+for i, (dt, row) in enumerate(self.signals.iterrows()):
+    px = row["price"]
+    sig = row["signal_trade"]
+```
+
+这样就能确保信号是用昨天的数据算出后，今天再执行，从而避免未来函数问题。
+
+---
+
+## 其他需要确认的细节
+
+* **手续费计算正确** ✅
+* **止损止盈逻辑合理** ✅（虽然稍显复杂，但整体逻辑正确）
+* **ATR及动量指标合理性** ✅
+* **仓位管理合理性** ✅（风控逻辑正确）
+
+但是在真实回测与实盘时必须：
+
+* 使用真实的次日开盘价执行交易，而不是昨日收盘价（现有数据为收盘价，因此略有偏差，但在每日数据回测中差异不会太大）；
+* 明确加入延迟（1天）信号以避免未来函数问题。
+
+---
+
+## 总结
+
+目前的策略回测逻辑存在严重的『未来函数』问题，建议按照上述方法：
+
+* **信号延迟一天后再执行**，即：
+
+  ```python
+  self.signals["signal_trade"] = self.signals["signal"].shift(1).fillna(0)
+  ```
+* 在回测循环里使用这个延迟后的信号进行回测。
+
+除此以外，你的代码逻辑和实现都较为完善，细节上未发现明显逻辑错误。
+
+以上修改后即可确保策略回测的逻辑正确性和有效性。
+
+
 class EnhancedTimingStrategy:
     def __init__(self, daily_returns: pd.Series):
         self.price = self._to_price(daily_returns).rename("price").to_frame()
