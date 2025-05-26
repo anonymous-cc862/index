@@ -1,201 +1,3 @@
-是的，你的理解完全正确。
-
----
-
-## 为什么要修改？
-
-回测逻辑上的『未来函数』问题不仅限于信号，实际上所有当天用来决策交易（如仓位大小、止损、止盈）的参数，都必须是**来自前一天或以前的数据**，不能使用当天的数据，否则会产生向前看的问题。
-
-在你的回测逻辑中，以下这些变量：
-
-* `rv` (realized volatility)
-* `floor`（波动率下限）
-* `cap`（波动率上限）
-
-都用于计算当天交易决策（如持仓大小），因此也应当与信号一样**向后移动一天**。
-
----
-
-## 修改方式
-
-你应该将所有用于交易决策的变量向后平移一天：
-
-```python
-self.signals["signal_trade"] = self.signals["signal"].shift(1).fillna(0)
-self.signals["rv_trade"]     = self.signals["RV14"].shift(1).fillna(method='bfill')
-self.signals["floor_trade"]  = self.signals["VOL_FLOOR"].shift(1).fillna(method='bfill')
-self.signals["cap_trade"]    = self.signals["VOL_CAP"].shift(1).fillna(method='bfill')
-```
-
----
-
-## 调整后的回测循环示例：
-
-```python
-# 将交易相关参数都用shift(1)提前一天准备好
-self.signals["signal_trade"] = self.signals["signal"].shift(1).fillna(0)
-self.signals["rv_trade"]     = self.signals["RV14"].shift(1).fillna(method='bfill')
-self.signals["floor_trade"]  = self.signals["VOL_FLOOR"].shift(1).fillna(method='bfill')
-self.signals["cap_trade"]    = self.signals["VOL_CAP"].shift(1).fillna(method='bfill')
-
-# 然后在回测循环中：
-for i, (dt, row) in enumerate(self.signals.iterrows()):
-    px    = row["price"]
-    sig   = row["signal_trade"]
-    rv    = row["rv_trade"]
-    floor = row["floor_trade"]
-    cap   = row["cap_trade"]
-
-    # 后续保持原逻辑不变...
-```
-
----
-
-## 这样修改的好处：
-
-* **逻辑严谨，避免未来函数问题**：
-  所有交易参数都是**提前一天**准备好，并在当天使用，因此符合实际交易逻辑。
-
-* **提升回测的真实性和可靠性**：
-  这样回测出的结果更接近实盘表现，更有可信度。
-
----
-
-## 总结修正后的代码段：
-
-完整清晰示例（推荐你直接插入回测函数开头）：
-
-```python
-def backtest(self):
-    # 明确提前一天生成交易相关变量
-    self.signals["signal_trade"] = self.signals["signal"].shift(1).fillna(0)
-    self.signals["rv_trade"]     = self.signals["RV14"].shift(1).fillna(method='bfill')
-    self.signals["floor_trade"]  = self.signals["VOL_FLOOR"].shift(1).fillna(method='bfill')
-    self.signals["cap_trade"]    = self.signals["VOL_CAP"].shift(1).fillna(method='bfill')
-
-    running_max = self.initial_capital
-    locked = False
-    port = {"cash": self.initial_capital, "pos": 0, "stop": 0, "tp": 0, 
-            "half_exit": False, "trail": 0, "max_entry": None, "min_entry": None}  
-    log = []
-    cooldown = 0
-    for i, (dt, row) in enumerate(self.signals.iterrows()):
-        px    = row["price"]
-        sig   = row["signal_trade"]
-        rv    = row["rv_trade"]
-        floor = row["floor_trade"]
-        cap   = row["cap_trade"]
-
-        # 以下的原有逻辑保持不变即可...
-```
-
----
-
-## 结论：
-
-是的，不仅仅是信号，**所有交易决策的指标（rv, floor, cap）都应当使用前一天的数据**。
-这样才是一个**正确且可靠的回测框架**。
-
-你提出的这个策略代码在**逻辑实现上存在一个核心的错误**：
-
----
-
-## 核心问题
-
-你当前的实现中，使用的是当日收盘价（Close Price）计算出信号后，**同一天立即执行交易**（也就是所谓的T+0回测模式）。
-在实际交易环境中，正常的策略逻辑是：
-
-1. **在交易日结束后**，利用当天闭市后的数据（Close Price）计算出买卖信号；
-2. 在**下一个交易日开盘**执行该信号（即 T+1 模式）。
-
-你现在的代码里：
-
-```python
-for i, (dt, row) in enumerate(self.signals.iterrows()):
-    px, sig = row["price"], row["signal"]
-```
-
-这里的 `px` 和 `sig` 都是在**同一天同时获得**的，这意味着你是**用未来数据进行交易决策**，这在真实回测中是不允许的，会显著高估策略表现。
-
----
-
-## 如何修正？
-
-修正的方法是明确区分出**信号日**和**交易执行日**：
-
-
-
-
-* 第一天（信号日）：使用当天闭市数据计算出信号；
-* 第二天（交易日）：使用第二天的价格执行昨天产生的信号。
-
-因此，你需要修改回测的逻辑，将信号向后平移一天：
-
-```python
-# === 修改回测信号 ===
-self.signals["signal_trade"] = self.signals["signal"].shift(1).fillna(0)
-```
-
-然后，回测交易循环应使用修改后的信号执行交易：
-
-```python
-for i, (dt, row) in enumerate(self.signals.iterrows()):
-    px = row["price"]                # 当天价格，用于交易执行
-    sig = row["signal_trade"]        # 使用前一天产生的信号
-```
-
----
-
-## 完整示意修改（明确指出如何修改）：
-
-你可以简单地在回测函数（`backtest`）前插入：
-
-```python
-self.signals["signal_trade"] = self.signals["signal"].shift(1).fillna(0)
-```
-
-再修改回测循环：
-
-```python
-for i, (dt, row) in enumerate(self.signals.iterrows()):
-    px = row["price"]
-    sig = row["signal_trade"]
-```
-
-这样就能确保信号是用昨天的数据算出后，今天再执行，从而避免未来函数问题。
-
----
-
-## 其他需要确认的细节
-
-* **手续费计算正确** ✅
-* **止损止盈逻辑合理** ✅（虽然稍显复杂，但整体逻辑正确）
-* **ATR及动量指标合理性** ✅
-* **仓位管理合理性** ✅（风控逻辑正确）
-
-但是在真实回测与实盘时必须：
-
-* 使用真实的次日开盘价执行交易，而不是昨日收盘价（现有数据为收盘价，因此略有偏差，但在每日数据回测中差异不会太大）；
-* 明确加入延迟（1天）信号以避免未来函数问题。
-
----
-
-## 总结
-
-目前的策略回测逻辑存在严重的『未来函数』问题，建议按照上述方法：
-
-* **信号延迟一天后再执行**，即：
-
-  ```python
-  self.signals["signal_trade"] = self.signals["signal"].shift(1).fillna(0)
-  ```
-* 在回测循环里使用这个延迟后的信号进行回测。
-
-除此以外，你的代码逻辑和实现都较为完善，细节上未发现明显逻辑错误。
-
-以上修改后即可确保策略回测的逻辑正确性和有效性。
-
-
 class EnhancedTimingStrategy:
     def __init__(self, daily_returns: pd.Series):
         self.price = self._to_price(daily_returns).rename("price").to_frame()
@@ -206,11 +8,11 @@ class EnhancedTimingStrategy:
         self.cost            = {"c": 0.001, "s": 0.0, "t": 0.0}
 
         # --- 新增 / 必要参数 ---
-        self.lookback_r      = 5      # 收益率窗口（≈一周）
+        self.lookback_r      = 3     # 收益率窗口（≈一周）
         self.lookback_slope  = 7      # 线性回归窗口
         self.ema_short       = 3
         self.ema_long        = 10
-        self.ens_weights     = (0.5, 0.3, 0.2)  # r5_z, slope7_z, ema_ratio_z 权重
+        self.ens_weights     = (1, 0, 0)#(0.5, 0.3, 0.2)  # r5_z, slope7_z, ema_ratio_z 权重
 
         # 下面保留原有 risk、vol、ATR 等参数（如有需要可删减）
         self.base_risk = 0.15
@@ -219,12 +21,20 @@ class EnhancedTimingStrategy:
         self.resume_drawdown    = 0.1
         self.circuit_breaker    = False
         self.stoploss_atr       = 1
-        self.takeprofit_atr     = 5
+        self.takeprofit_atr     = 2
         self.cooldown_period    = 5
-        self.pct_window         = 60
+        self.pct_window         = 40
         self.low_vol_low        = 0.2
         self.high_vol_high      = 0.8
-        self.MAX_WINDOW         = 120
+        #self.MAX_WINDOW         = 120
+
+        self.rv_scale_window=30
+        # self.ensemble_high=0.2#1#0.3
+        # self.ensemble_low=-0.2#1#0.3
+        self.ensemble_high=0.8#0.3
+        self.ensemble_low=0.2#1#
+
+
 
     # ---------- helpers ----------
     @staticmethod
@@ -241,28 +51,31 @@ class EnhancedTimingStrategy:
         df = self.price
 
         # --- 三个动量子因子 ---
-
-        df["R5"]       = df["price"].pct_change(self.lookback_r)
+        df["ret1"] = df["price"].pct_change()
+        #df["R5"]       = df["price"].pct_change(self.lookback_r) 
+        df["R5_m"] = df["ret1"].rolling(self.lookback_r).mean()
+ #5天return变化
 
         df["Slope7"]   = df["price"].rolling(self.lookback_slope).apply(lambda x: np.polyfit(range(len(x)), x, 1)[0], raw=False)
-
+#β₁>0 表示整体斜率向上，捕捉 趋势形态
         ema_s          = df["price"].ewm(span=self.ema_short).mean()
 
         ema_l          = df["price"].ewm(span=self.ema_long).mean()
+        
 
         df["EMA_ratio"] = ema_s / ema_l - 1
-
+#：短均在长均之上 → 近期价格站上均值 → 上升动量；反之下跌。
         # --- 120 日 z-score 标准化 ---
 
-        for col in ("R5", "Slope7", "EMA_ratio"):
-
-            df[col+"_z"] = (df[col] - df[col].rolling(60).mean()) / (df[col].rolling(60).std() + 1e-9)
+        for col in ("R5_m", "Slope7", "EMA_ratio"):
+            df[col+"_z"]  = df[col].rolling(self.pct_window).rank(pct=True)
+            #df[col+"_z"] = (df[col] - df[col].rolling(self.rv_scale_window).mean()) / (df[col].rolling(self.rv_scale_window).std() + 1e-9)
 
         # --- 线性组合得到 ensemble 动量 ---
 
         w1, w2, w3     = self.ens_weights
 
-        df["ensemble"] = w1*df["R5_z"] + w2*df["Slope7_z"] + w3*df["EMA_ratio_z"]
+        df["ensemble"] = w1*df["R5_m_z"] + w2*df["Slope7_z"] + w3*df["EMA_ratio_z"]
 
         # ===== (保留原来的波动率、ATR 等，如仍有需要) =====
 
@@ -293,29 +106,35 @@ class EnhancedTimingStrategy:
 
         df["raw_sig"] = np.select(
 
-            [df["ensemble"] > 0,
+            [df["ensemble"] > self.ensemble_high,
 
-             df["ensemble"] < 0],
+             df["ensemble"] < self.ensemble_low],
             [1, -1],
             0
         )
 
         # 只有发生翻转时才触发交易（去抖）
+       # Only fire on 0→±1 or ±1→∓1 transition
         df["signal"] = df["raw_sig"].where(
             df["raw_sig"].shift(fill_value=0) != df["raw_sig"], 0
         )
+        #应该1→0，减；-1→0，加；1→1，是否加；-1→-1，是否减
 
         # === 输出你需要的列 ===
         #self.signals = df[["price", "signal", "ensemble"]] 
         self.signals =  df[["price", "signal", "ensemble", 'RV14', 'VOL_FLOOR', 'VOL_CAP']] 
         print(df["signal"].value_counts())
         print("backtest start:", self.signals.index[0])
+        self.signals["signal_trade"] = self.signals["signal"].shift(1).fillna(0) #用前一天的signal做后一天的执行
+        self.signals["rv_trade"]     = self.signals["RV14"].shift(1).fillna(method='bfill')
+        self.signals["floor_trade"]  = self.signals["VOL_FLOOR"].shift(1).fillna(method='bfill')
+        self.signals["cap_trade"]    = self.signals["VOL_CAP"].shift(1).fillna(method='bfill')
         return self.signals
 
 
 
     # ----------- backtest ----------
-    #T+0     
+    #T+1     
     def backtest(self):
         running_max = self.initial_capital
         locked = False
@@ -324,10 +143,11 @@ class EnhancedTimingStrategy:
         log = []
         cooldown = 0
         for i, (dt, row) in enumerate(self.signals.iterrows()):
-            px, sig = row["price"], row["signal"]#, row["ATR"]
-            rv   = row['RV14']
-            floor= row['VOL_FLOOR']
-            cap  = row['VOL_CAP']
+            px= row["price"]
+            sig = row["signal_trade"] #, row["signal"]#, row["ATR"]
+            rv    = row["rv_trade"]
+            floor = row["floor_trade"]
+            cap   = row["cap_trade"]
 
 
             # ---------- Stop loss closing----------
@@ -512,8 +332,7 @@ class EnhancedTimingStrategy:
         # reduce_size = min(abs(port["pos"]), self._position_size(px, port["cash"]))
         # port["pos"] += reduce_size * np.sign(sig)
         print(f"Open: pos={port['pos']}, cash={port['cash']}, nav={nav_after_close}, px={px}, stop={port['stop']}, tp={port['tp']}")
-
-
+        
     # ---------- open----------
     def _open(self, port, sig, px, rv, bar_idx, floor, cap, nav):
         size = self._position_size(px, rv, nav, bar_idx,floor, cap, port)
@@ -547,3 +366,11 @@ class EnhancedTimingStrategy:
     
         port.update({"pos":0, "stop":0, "tp":0, "half_exit":False, "trail":0})
         print(f"Close: pos={port['pos']}, cash={port['cash']},  px={px}, stop={port['stop']}, tp={port['tp']}")
+
+    # ---------- performance ---------- 
+    def performance (self,save_path: Path | None = None, plot_trades: bool = True):
+        ret = self.results["nav"].pct_change().dropna()
+        ann_ret = (self.results["nav"].iloc[-1] / self.results["nav"].iloc[0]) ** (252 / len(self.results)) - 1 #ret??
+        sharpe = (ret.mean() / ret.std()) * np.sqrt(252) if ret.std() else 0
+        dd = (self.results["nav"].cummax() - self.results["nav"]) / self.results["nav"].cummax()
+        print(f"Ann return: {ann_ret:.2%};  Sharpe: {sharpe:.2f};  MaxDD: {dd.max():.2%}")
