@@ -1,3 +1,30 @@
+# 在 daily_data_for_event.append(data_for_this_day) 之后
+                    # 先准备好需要打印的字符串，这样更清晰
+                    rsi_pct_str = f"{data_for_this_day['RSI_pct']:.2f}" if pd.notna(data_for_this_day['RSI_pct']) else 'N/A'
+                    raw_sig_str = str(int(data_for_this_day['raw_sig'])) if pd.notna(data_for_this_day['raw_sig']) else 'N/A' # 假设 raw_sig 是数值
+                    signal_str = str(int(data_for_this_day['signal'])) if pd.notna(data_for_this_day['signal']) else 'N/A'  # 假设 signal 是数值
+                    
+                    is_ranging_val = data_for_this_day['is_ranging']
+                    if pd.notna(is_ranging_val): # 处理 is_ranging 可能为 np.nan 的情况
+                        ranging_str = '是' if is_ranging_val == True else '否'
+                    else:
+                        ranging_str = 'N/A'
+                        
+                    # .get(key, default_value) 用于安全访问字典，防止因上游代码逻辑不完善导致键确实不存在
+                    cooldown_str = '是' if data_for_this_day.get('cooldown_active') else '否'
+                    locked_str = '是' if data_for_this_day.get('locked_active') else '否'
+                    pos_str = str(int(data_for_this_day['pos'])) if pd.notna(data_for_this_day['pos']) else 'N/A' # 假设 pos 是数值
+
+                    print(f"    {data_for_this_day['date']}: "
+                          f"RSI_pct={rsi_pct_str}, "
+                          f"raw_sig={raw_sig_str}, "
+                          f"signal={signal_str}, "
+                          f"ranging={ranging_str}, "
+                          f"cooldown={cooldown_str}, "
+                          f"locked={locked_str}, "
+                          f"pos={pos_str}")
+
+
 ---------------------------------------------------------------------------
 ValueError                                Traceback (most recent call last)
 Cell In[47], line 40
