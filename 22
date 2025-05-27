@@ -1,3 +1,28 @@
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+Cell In[47], line 40
+     37 strat_test.performance()
+     39 # 4. 调用新的分析方法
+---> 40 post_uptrend_analysis_results = strat_test.get_data_after_uptrend_ends(num_days_to_get=10)
+     42 # 您可以进一步处理 post_uptrend_analysis_results，它是一个包含详细数据的列表
+     43 if post_uptrend_analysis_results:
+
+Cell In[46], line 689, in EnhancedTimingStrategy.get_data_after_uptrend_ends(self, num_days_to_get)
+    686         data_for_this_day['pos'] = np.nan
+    688     daily_data_for_event.append(data_for_this_day)
+--> 689     print(f"    {data_for_this_day['date']}: "
+    690         f"RSI_pct={data_for_this_day['RSI_pct']:.2f if pd.notna(data_for_this_day['RSI_pct']) else 'N/A'}, "
+    691         f"raw_sig={data_for_this_day['raw_sig'] if pd.notna(data_for_this_day['raw_sig']) else 'N/A'}, "
+    692         f"signal={data_for_this_day['signal'] if pd.notna(data_for_this_day['signal']) else 'N/A'}, "
+    693         f"ranging={'是' if data_for_this_day['is_ranging'] == True else ('否' if data_for_this_day['is_ranging'] == False else 'N/A')}, " # noqa
+    694         f"cooldown={'是' if data_for_this_day['cooldown_active'] else '否'}, "
+    695         f"locked={'是' if data_for_this_day['locked_active'] else '否'}, "
+    696         f"pos={data_for_this_day['pos'] if pd.notna(data_for_this_day['pos']) else 'N/A'}")
+    697 else:
+    698     print(f"    在为 {uptrend_end_date.strftime('%Y-%m-%d')} 获取后续数据时，数据不足 {num_days_to_get} 天。仅获取到 {day_offset} 天。")
+
+ValueError: Invalid format specifier '.2f if pd.notna(data_for_this_day['RSI_pct']) else 'N/A'' for object of type 'float'
+
 #!
 import pandas as pd
 import numpy as np
