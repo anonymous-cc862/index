@@ -1,3 +1,141 @@
+# 将此方法添加到 EnhancedTimingStrategy 类内部
+    def get_data_after_uptrend_ends(self, num_days_to_get: int = 10) -> list:
+        """
+        识别上升趋势（绿色部分）结束点，并获取其后连续 N 天的指定数据。
+
+        Args:
+            num_days_to_get (int): 上升趋势结束后要获取数据的连续天数。默认为 10。
+
+        Returns:
+            list: 一个包含字典的列表，每个字典代表一个上升趋势结束事件，
+                  并包含其后 N 天的每日数据。
+        """
+        if not hasattr(self, 'signals') or \
+           not hasattr(self, 'df') or \
+           not hasattr(self, 'results'):
+            print("错误: 请确保 calc_indicators(), generate_signals(), 和 backtest() 都已运行完毕。")
+            return []
+
+        required_signal_cols = ['trend_flag', 'raw_sig', 'signal']
+        if not all(col in self.signals.columns for col in required_signal_cols):
+            print(f"错误: self.signals 必须包含以下列: {required_signal_cols}")
+            return []
+        if 'RSI_pct' not in self.df.columns:
+            print("错误: self.df 必须包含 'RSI_pct' 列。")
+            return []
+        
+        required_results_cols = ['pos', 'cooldown_active', 'locked_active']
+        if not all(col in self.results.columns for col in required_results_cols):
+            print(f"错误: self.results 必须包含以下列: {required_results_cols} (需修改 backtest 日志)。")
+            return []
+
+        if not isinstance(self.signals.index, pd.DatetimeIndex) or \
+           not isinstance(self.df.index, pd.DatetimeIndex) or \
+           not isinstance(self.results.index, pd.DatetimeIndex):
+            print("错误: 'self.signals', 'self.df', 和 'self.results' 的索引必须是 pandas DatetimeIndex。")
+            return []
+
+        print(f"\n--- 分析：上升趋势结束后连续 {num_days_to_get} 天的数据 ---")
+        
+        last_days_of_uptrends = []
+        trend_flag_series = self.signals['trend_flag']
+
+        # 识别上升趋势的最后一天
+        for i in range(1, len(trend_flag_series)):
+            if trend_flag_series.iloc[i-1] == 1 and trend_flag_series.iloc[i] != 1:
+                last_days_of_uptrends.append(trend_flag_series.index[i-1])
+        
+        if not last_days_of_uptrends:
+            print("未找到已结束的上升趋势周期。")
+            return []
+
+        all_events_data = []
+
+        for uptrend_end_date in last_days_of_uptrends:
+            print(f"\n>> 上升趋势结束于: {uptrend_end_date.strftime('%Y-%m-%d')}")
+            
+            # 确定从哪个日期开始获取后续10天的数据
+            # 我们需要找到 uptrend_end_date 在 self.results.index 中的位置，然后从下一天开始
+            try:
+                # get_loc 可能会因非单调索引或非唯一索引报错，但通常对于时间序列是OK的
+                # 我们需要的是 uptrend_end_date 之后的第一个交易日索引位置
+                # 如果 uptrend_end_date 本身就是 results.index 的一部分：
+                if uptrend_end_date in self.results.index:
+                    start_index_pos_in_results = self.results.index.get_loc(uptrend_end_date) + 1
+                else:
+                    # 如果 uptrend_end_date 不是交易日，则找到它之后的第一个交易日
+                    # 这通常不应该发生，因为 trend_flag 是基于交易日计算的
+                    # 为了稳健，我们从 self.signals 中获取，然后匹配到 self.results
+                    potential_start_dates = self.results.index[self.results.index > uptrend_end_date]
+                    if potential_start_dates.empty:
+                        print(f"  警告: 在 {uptrend_end_date.strftime('%Y-%m-%d')} 之后未找到更多交易日数据。")
+                        continue
+                    start_index_pos_in_results = self.results.index.get_loc(potential_start_dates[0])
+
+            except KeyError:
+                print(f"  警告: 日期 {uptrend_end_date.strftime('%Y-%m-%d')} 在 self.results.index 中未找到。跳过此结束点。")
+                continue
+
+            daily_data_for_event = []
+            print(f"  获取之后 {num_days_to_get} 天的数据:")
+            for day_offset in range(num_days_to_get):
+                current_day_index_pos = start_index_pos_in_results + day_offset
+                if current_day_index_pos < len(self.results.index):
+                    current_analysis_date = self.results.index[current_day_index_pos]
+                    
+                    data_for_this_day = {'date': current_analysis_date.strftime('%Y-%m-%d')}
+                    
+                    # 从 self.df 获取 RSI_pct
+                    try:
+                        data_for_this_day['RSI_pct'] = self.df.loc[current_analysis_date, 'RSI_pct']
+                    except KeyError:
+                        data_for_this_day['RSI_pct'] = np.nan
+
+                    # 从 self.signals 获取 raw_sig, signal, is_ranging
+                    try:
+                        data_for_this_day['raw_sig'] = self.signals.loc[current_analysis_date, 'raw_sig']
+                        data_for_this_day['signal'] = self.signals.loc[current_analysis_date, 'signal']
+                        data_for_this_day['is_ranging'] = (self.signals.loc[current_analysis_date, 'trend_flag'] == 0)
+                    except KeyError:
+                        data_for_this_day['raw_sig'] = np.nan
+                        data_for_this_day['signal'] = np.nan
+                        data_for_this_day['is_ranging'] = np.nan
+
+                    # 从 self.results 获取 cooldown_active, locked_active, pos
+                    try:
+                        data_for_this_day['cooldown_active'] = self.results.loc[current_analysis_date, 'cooldown_active']
+                        data_for_this_day['locked_active'] = self.results.loc[current_analysis_date, 'locked_active']
+                        data_for_this_day['pos'] = self.results.loc[current_analysis_date, 'pos']
+                    except KeyError: # Should not happen if current_analysis_date comes from self.results.index
+                        data_for_this_day['cooldown_active'] = np.nan
+                        data_for_this_day['locked_active'] = np.nan
+                        data_for_this_day['pos'] = np.nan
+                    
+                    daily_data_for_event.append(data_for_this_day)
+                    print(f"    {data_for_this_day['date']}: "
+                          f"RSI_pct={data_for_this_day['RSI_pct']:.2f if pd.notna(data_for_this_day['RSI_pct']) else 'N/A'}, "
+                          f"raw_sig={data_for_this_day['raw_sig'] if pd.notna(data_for_this_day['raw_sig']) else 'N/A'}, "
+                          f"signal={data_for_this_day['signal'] if pd.notna(data_for_this_day['signal']) else 'N/A'}, "
+                          f"ranging={'是' if data_for_this_day['is_ranging'] == True else ('否' if data_for_this_day['is_ranging'] == False else 'N/A')}, " # noqa
+                          f"cooldown={'是' if data_for_this_day['cooldown_active'] else '否'}, "
+                          f"locked={'是' if data_for_this_day['locked_active'] else '否'}, "
+                          f"pos={data_for_this_day['pos'] if pd.notna(data_for_this_day['pos']) else 'N/A'}")
+                else:
+                    print(f"    在为 {uptrend_end_date.strftime('%Y-%m-%d')} 获取后续数据时，数据不足 {num_days_to_get} 天。仅获取到 {day_offset} 天。")
+                    break
+            
+            all_events_data.append({
+                'uptrend_end_date': uptrend_end_date.strftime('%Y-%m-%d'),
+                'consecutive_days_data': daily_data_for_event
+            })
+        return all_events_data
+
+
+
+
+
+
+
 ===== Out-of-sample (测试) =====
  0    165
  1     15
