@@ -1,3 +1,42 @@
+if __name__ == "__main__":
+    np.random.seed(0)
+
+    # 1. 读数据并排序
+    df = pd.read_csv("weighted_return\Gold_benchmark_weights_return.csv")
+    df["date"] = pd.to_datetime(df["date"])
+    df = df[~((df["date"].dt.weekday >= 5) & (df["weighted_return_2"] == 0))].reset_index(drop=True)
+    daily_rets = df.set_index("date")["weighted_return_2"].sort_index()
+
+    # 2. 设分界日
+    train_end_date = pd.Timestamp("2024-07-01")
+    test_start_date = pd.Timestamp("2024-07-01")
+
+    # 3. 切训练 / 测试
+    in_sample  = daily_rets.loc[: train_end_date - pd.Timedelta(days=1)]   # 2023-05-15 ~ 2024-11-14
+    out_sample = daily_rets.loc[test_start_date:]                           # 2024-11-15 ~ 2025-05-15
+
+    # ========== 训练集 ==========
+    print("\n===== In-sample (训练) =====")
+    strat_train = EnhancedTimingStrategy(in_sample)
+    ddf=strat_train.calc_indicators()
+    si=strat_train.generate_signals()
+    re=strat_train.backtest()
+    strat_train.performance()            # 或 strat_train.performance(show_chart=True) 等
+
+    # 如果你的策略在训练阶段"学"出了某些参数，需要传给测试对象，
+    # 假设类里暴露了 get_fitted_params() / set_fitted_params() 之类接口：
+    fitted_params = getattr(strat_train, "get_fitted_params", lambda: {})()
+
+    # ========== 测试集 ==========
+    print("\n===== Out-of-sample (测试) =====")
+    strat_test = EnhancedTimingStrategy(out_sample)#, **fitted_params)
+    strat_test.calc_indicators()         # 视需要而定：有些指标不依赖训练就可以直接算
+    strat_test.generate_signals()
+    strat_test.backtest()
+    strat_test.performance()
+
+
+
 #!
 import pandas as pd
 import numpy as np
