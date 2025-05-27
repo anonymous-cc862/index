@@ -1,3 +1,74 @@
+# 这个方法应该放在您的 EnhancedTimingStrategy 类定义内部
+    def get_data_after_uptrend_ends(self, num_days_to_get: int = 10) -> list:
+        """
+        识别上升趋势（绿色部分）结束点，并获取其后连续 N 天的指定数据。
+
+        Args:
+            num_days_to_get (int): 上升趋势结束后要获取数据的连续天数。默认为 10。
+
+        Returns:
+            list: 一个包含字典的列表，每个字典代表一个上升趋势结束事件，
+                  并包含其后 N 天的每日数据。
+        """
+        if not hasattr(self, 'signals') or \
+           not hasattr(self, 'df') or \
+           not hasattr(self, 'results'):
+            print("错误: 请确保 calc_indicators(), generate_signals(), 和 backtest() 都已运行完毕。")
+            return []
+
+        required_signal_cols = ['trend_flag', 'raw_sig', 'signal']
+        if not all(col in self.signals.columns for col in required_signal_cols):
+            print(f"错误: self.signals 必须包含以下列: {required_signal_cols}")
+            return []
+        if 'RSI_pct' not in self.df.columns:
+            print("错误: self.df 必须包含 'RSI_pct' 列。")
+            return []
+        
+        required_results_cols = ['pos', 'cooldown_active', 'locked_active']
+        if not all(col in self.results.columns for col in required_results_cols):
+            print(f"错误: self.results 必须包含以下列: {required_results_cols} (需修改 backtest 日志)。")
+            return []
+
+        if not isinstance(self.signals.index, pd.DatetimeIndex) or \
+           not isinstance(self.df.index, pd.DatetimeIndex) or \
+           not isinstance(self.results.index, pd.DatetimeIndex):
+            print("错误: 'self.signals', 'self.df', 和 'self.results' 的索引必须是 pandas DatetimeIndex。")
+            return []
+
+        print(f"\n--- 分析：上升趋势结束后连续 {num_days_to_get} 天的数据 ---")
+        
+        last_days_of_uptrends = []
+        trend_flag_series = self.signals['trend_flag']
+
+        # 识别上升趋势的最后一天
+        for i in range(1, len(trend_flag_series)):
+            if trend_flag_series.iloc[i-1] == 1 and trend_flag_series.iloc[i] != 1:
+                last_days_of_uptrends.append(trend_flag_series.index[i-1])
+        
+        if not last_days_of_uptrends:
+            print("未找到已结束的上升趋势周期。")
+            return []
+
+        all_events_data = []
+
+        for uptrend_end_date in last_days_of_uptrends:
+            print(f"\n>> 上升趋势结束于: {uptrend_end_date.strftime('%Y-%m-%d')}")
+            
+            try:
+                if uptrend_end_date in self.results.index:
+                    start_index_pos_in_results = self.results.index.get_loc(uptrend_end_date) + 1
+                else:
+                    potential_start_dates = self.results.index[self.results.index > uptrend_end_date]
+                    if potential_start_dates.empty:
+                        print(f"  警告: 在 {uptrend_end_date.strftime('%Y-%m-%d')} 之后未找到更多交易日数据。")
+                        continue
+                    start_index_pos
+
+
+
+
+
+
 # 在 daily_data_for_event.append(data_for_this_day) 之后
                     # 先准备好需要打印的字符串，这样更清晰
                     rsi_pct_str = f"{data_for_this_day['RSI_pct']:.2f}" if pd.notna(data_for_this_day['RSI_pct']) else 'N/A'
