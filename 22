@@ -1,3 +1,14 @@
+# # 4. 调用新的分析方法
+# post_uptrend_analysis_results = strategy.get_data_after_uptrend_ends(num_days_to_get=10)
+
+# # 您可以进一步处理 post_uptrend_analysis_results，它是一个包含详细数据的列表
+# if post_uptrend_analysis_results:
+#     for event_data in post_uptrend_analysis_results:
+#         print(f"针对上升趋势结束于 {event_data['uptrend_end_date']} 的事件:")
+#         for day_data in event_data['consecutive_days_data']:
+#             # 这里可以对 day_data 做进一步处理或聚合
+#             pass 
+
 # 将此方法添加到 EnhancedTimingStrategy 类内部
     def get_data_after_uptrend_ends(self, num_days_to_get: int = 10) -> list:
         """
