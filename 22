@@ -1,3 +1,147 @@
+
+好的，要实现这个功能——获取“绿色部分”（即策略判断的上升趋势）结束之后15天的 `RSI_pct` 值——我们需要在您的 `EnhancedTimingStrategy` 类中添加一个新的方法。
+
+这个新方法将执行以下操作：
+1.  分析 `self.signals['trend_flag']` 列，找出所有上升趋势（`trend_flag == 1`）结束的日期。一个上升趋势的结束点是 `trend_flag` 从1变为非1（即0或-1）的前一天。
+2.  对于每个找到的上升趋势结束日期，计算其后15个自然日的日期。
+3.  获取这个未来日期（或之后最近的一个交易日）在 `self.df` 中的 `RSI_pct` 值。
+
+以下是可以添加到您的 `EnhancedTimingStrategy` 类中的新方法 `get_rsi_after_uptrend_ends`：
+
+```python
+    # Place this method inside your EnhancedTimingStrategy class
+    def get_rsi_after_uptrend_ends(self, days_to_look_ahead: int = 15) -> list:
+        """
+        Identifies when an uptrend (green part) ends and gets the RSI_pct
+        for the date 'days_to_look_ahead' calendar days after the uptrend ended.
+
+        Args:
+            days_to_look_ahead (int): Number of calendar days after the uptrend ends
+                                      to get the RSI_pct for. Defaults to 15.
+
+        Returns:
+            list: A list of dictionaries, where each dictionary contains:
+                  'uptrend_end_date', 'target_future_date', 
+                  'actual_rsi_date_found', 'rsi_pct_value'.
+                  Returns an empty list if no uptrends or relevant RSI_pct found.
+        """
+        if not hasattr(self, 'signals') or 'trend_flag' not in self.signals.columns:
+            print("错误: 包含 'trend_flag' 的交易信号尚未生成。请先运行 generate_signals()。")
+            return []
+        if not hasattr(self, 'df') or 'RSI_pct' not in self.df.columns:
+            print("错误: 包含 'RSI_pct' 的主 DataFrame 'df' 不可用。请先运行 calc_indicators()。")
+            return []
+        if not isinstance(self.signals.index, pd.DatetimeIndex) or \
+           not isinstance(self.df.index, pd.DatetimeIndex):
+            print("错误: 'self.signals' 和 'self.df' 的索引必须是 pandas DatetimeIndex。")
+            return []
+
+        print(f"\n分析: 在上升趋势结束后 {days_to_look_ahead} 天的 RSI_pct")
+        
+        last_days_of_uptrends = []
+        trend_flag_series = self.signals['trend_flag']
+
+        for i in range(1, len(trend_flag_series)): # Start from the second element to check previous
+            current_date = trend_flag_series.index[i]
+            current_flag = trend_flag_series.iloc[i]
+            
+            previous_date = trend_flag_series.index[i-1]
+            previous_flag = trend_flag_series.iloc[i-1]
+            
+            if previous_flag == 1 and current_flag != 1:
+                # Uptrend ended on previous_date
+                last_days_of_uptrends.append(previous_date)
+        
+        # Consider if the very last day of data is an uptrend day (it "ends" there for analysis)
+        # User question implies a transition, so the loop above is generally sufficient.
+        # If you want to consider an uptrend ending on the last day of data as an "end":
+        # if len(trend_flag_series) > 0 and trend_flag_series.iloc[-1] == 1:
+        #     # Check if it's not already added (e.g., if the series is just [1])
+        #     if not last_days_of_uptrends or last_days_of_uptrends[-1] != trend_flag_series.index[-1]:
+        #          last_days_of_uptrends.append(trend_flag_series.index[-1])
+        # For now, sticking to explicit transitions where trend changes from 1 to non-1.
+
+        if not last_days_of_uptrends:
+            print("未找到已结束的上升趋势周期。")
+            return []
+
+        results_list = []
+        for uptrend_end_date in last_days_of_uptrends:
+            target_future_date = uptrend_end_date + pd.Timedelta(days=days_to_look_ahead)
+            
+            rsi_pct_value_found = np.nan
+            actual_rsi_date_found = pd.NaT
+
+            # Try to find the exact date or the next available trading day in self.df
+            if target_future_date in self.df.index:
+                actual_rsi_date_found = target_future_date
+                rsi_pct_value_found = self.df.loc[actual_rsi_date_found, 'RSI_pct']
+            else:
+                # If target_future_date is not a trading day or out of range (for exact match),
+                # find the first trading day *after* target_future_date
+                future_trading_days = self.df.index[self.df.index >= target_future_date]
+                if not future_trading_days.empty:
+                    actual_rsi_date_found = future_trading_days[0]
+                    rsi_pct_value_found = self.df.loc[actual_rsi_date_found, 'RSI_pct']
+            
+            if pd.notna(rsi_pct_value_found):
+                print(f"  上升趋势结束于: {uptrend_end_date.strftime('%Y-%m-%d')}")
+                print(f"    目标未来日期 ({days_to_look_ahead} 天后): {target_future_date.strftime('%Y-%m-%d')}")
+                print(f"    实际获取RSI_pct的日期: {actual_rsi_date_found.strftime('%Y-%m-%d')}")
+                print(f"    该日 RSI_pct: {rsi_pct_value_found:.4f}")
+                results_list.append({
+                    'uptrend_end_date': uptrend_end_date,
+                    'target_future_date': target_future_date,
+                    'actual_rsi_date_found': actual_rsi_date_found,
+                    'rsi_pct_value': rsi_pct_value_found
+                })
+            else:
+                print(f"  上升趋势结束于: {uptrend_end_date.strftime('%Y-%m-%d')}")
+                print(f"    无法为目标未来日期 (~{target_future_date.strftime('%Y-%m-%d')}) 找到 RSI_pct 数据。")
+                print(f"    (可能超出了数据范围或者 {days_to_look_ahead} 天后没有更多交易日)")
+        
+        return results_list
+
+```
+
+**如何使用这个新方法：**
+
+1.  将上面的 `get_rsi_after_uptrend_ends` 方法代码复制并粘贴到您的 `EnhancedTimingStrategy` 类定义中。
+2.  在您的主执行流程中，确保在调用此新方法之前，已经调用了 `calc_indicators()` 和 `generate_signals()`。
+
+```python
+# 示例代码
+# 假设 daily_returns 是您的日收益率 pd.Series
+# strategy = EnhancedTimingStrategy(daily_returns)
+
+# 1. 计算所有指标 (包括 RSI_pct)
+# strategy.calc_indicators()
+
+# 2. 生成信号 (包括 trend_flag)
+# strategy.generate_signals()
+
+# 3. 调用新方法获取特定天数后的 RSI_pct
+# days_look_ahead = 15
+# rsi_results = strategy.get_rsi_after_uptrend_ends(days_to_look_ahead=days_look_ahead)
+
+# if rsi_results:
+#     print(f"\n--- 总结: 上升趋势结束后 {days_look_ahead} 天的 RSI_pct ---")
+#     for res_dict in rsi_results:
+#         print(f"上升趋势结束: {res_dict['uptrend_end_date'].strftime('%Y-%m-%d')}, "
+#               f"{days_look_ahead}天后 ({res_dict['actual_rsi_date_found'].strftime('%Y-%m-%d')}) RSI_pct: {res_dict['rsi_pct_value']:.4f}")
+# else:
+#     print("没有找到相关结果。")
+
+```
+
+**重要说明：**
+
+* **DatetimeIndex**：此代码假设 `self.signals.index` 和 `self.df.index` 都是 `pd.DatetimeIndex` 类型。如果您的日期索引不是这种类型，`pd.Timedelta` 和日期比较可能会出错。通常，金融时间序列数据会使用 `DatetimeIndex`。
+* **交易日 vs. 自然日**：`pd.Timedelta(days=days_to_look_ahead)` 计算的是自然日。代码会尝试找到这个自然日之后（或当天，如果是交易日的话）的第一个实际交易日来获取 `RSI_pct`。
+* **数据范围**：如果计算出的未来日期超出了您 `self.df` DataFrame 的数据范围，那么将无法获取 `RSI_pct` 值。
+
+这个方法应该能帮助您分析上升趋势结束特定天数后的 `RSI_pct` 情况。
+
 if __name__ == "__main__":
     np.random.seed(0)
 
