@@ -1,151 +1,119 @@
-# 这个方法应该放在您的 EnhancedTimingStrategy 类定义内部
-    def get_data_after_uptrend_ends(self, num_days_to_get: int = 10) -> list:
-        """
-        识别上升趋势（绿色部分）结束点，并获取其后连续 N 天的指定数据。
+您好！您提出的这个问题非常关键，指出了之前修改方案的一个局限性。
 
-        Args:
-            num_days_to_get (int): 上升趋势结束后要获取数据的连续天数。默认为 10。
+您是对的，我之前给出的 `signal` 生成逻辑：
+```python
+raw_sig_changed = (df["raw_sig"].shift(fill_value=0) != df["raw_sig"])
+trend_regime_changed_with_opinion = ((df["trend_flag"].shift(fill_value=0) != df["trend_flag"]) & (df["raw_sig"] != 0))
+df["signal"] = df["raw_sig"].where(raw_sig_changed | trend_regime_changed_with_opinion, 0)
+```
+这个方案主要解决了**趋势状态 (`trend_flag`) 发生变化时**，即使 `raw_sig` 数值没变也能产生新信号的问题。
 
-        Returns:
-            list: 一个包含字典的列表，每个字典代表一个上升趋势结束事件，
-                  并包含其后 N 天的每日数据。
-        """
-        if not hasattr(self, 'signals') or \
-           not hasattr(self, 'df') or \
-           not hasattr(self, 'results'):
-            print("错误: 请确保 calc_indicators(), generate_signals(), 和 backtest() 都已运行完毕。")
-            return []
+但是，正如您所说，它**没有解决在同一趋势状态下（例如，一直处于 `ranging` 状态）**，发生一次平仓 (`pos=0`) 后，如果后续的 `raw_sig` 条件再次满足且其数值与平仓前的 `raw_sig` 相同，`signal` 仍会是0，导致无法再次入场的问题。
 
-        required_signal_cols = ['trend_flag', 'raw_sig', 'signal']
-        if not all(col in self.signals.columns for col in required_signal_cols):
-            print(f"错误: self.signals 必须包含以下列: {required_signal_cols}")
-            return []
-        if 'RSI_pct' not in self.df.columns:
-            print("错误: self.df 必须包含 'RSI_pct' 列。")
-            return []
+**为什么会这样？**
+因为在这种情况下：
+1.  `raw_sig_changed` 为 False（因为 `raw_sig` 数值与前一天相同）。
+2.  `trend_regime_changed_with_opinion` 为 False（因为 `trend_flag` 没有变化）。
+所以 `signal` 依然是0。
+
+**如何更好地改进逻辑？**
+
+您的想法“close了之后如果raw signal=1且价格回调，可以signal=1”以及“但又不能close之后马上同向买入”触及了核心：我们需要一种机制，允许在平仓后重新评估入场机会，同时可能需要避免过于频繁的“止损后立即再入场”。
+
+直接在 `generate_signals` 中实现“close了之后”的逻辑很困难，因为这个函数在计算指标和生成信号时，通常不直接感知实时回测中的仓位 (`pos`) 状态。
+
+**一个更通用的、且能解决您描述的两种情况（趋势变化后 和 同趋势下平仓后）的改进思路，通常涉及以下两个层面的调整：**
+
+**层面1：`generate_signals` 中的 `signal` 生成逻辑**
+
+我们需要一个 `signal` 逻辑，它能产生一个“脉冲式”的信号，即当一个入场条件“首次”出现或“再次变得显著”时发出信号。
+考虑以下 `signal` 逻辑，它尝试在 `raw_sig` 从0变为非0，或者 `raw_sig` 的正负号发生变化时产生信号：
+
+```python
+        # 在 generate_signals 方法中，替换 signal 生成部分
+
+        # prev_raw_sig 是上一日的原始信号
+        prev_raw_sig = df["raw_sig"].shift(fill_value=0)
+
+        # 条件a: raw_sig 从0变成了非0 (新机会出现)
+        condition_a = (prev_raw_sig == 0) & (df["raw_sig"] != 0)
         
-        required_results_cols = ['pos', 'cooldown_active', 'locked_active']
-        if not all(col in self.results.columns for col in required_results_cols):
-            print(f"错误: self.results 必须包含以下列: {required_results_cols} (需修改 backtest 日志)。")
-            return []
-
-        if not isinstance(self.signals.index, pd.DatetimeIndex) or \
-           not isinstance(self.df.index, pd.DatetimeIndex) or \
-           not isinstance(self.results.index, pd.DatetimeIndex):
-            print("错误: 'self.signals', 'self.df', 和 'self.results' 的索引必须是 pandas DatetimeIndex。")
-            return []
-
-        print(f"\n--- 分析：上升趋势结束后连续 {num_days_to_get} 天的数据 ---")
+        # 条件b: raw_sig 的方向发生了改变 (例如从1变成-1，或者-1变成1)
+        condition_b = (prev_raw_sig != 0) & (df["raw_sig"] != 0) & (np.sign(prev_raw_sig) != np.sign(df["raw_sig"]))
         
-        last_days_of_uptrends = []
-        trend_flag_series = self.signals['trend_flag']
+        # 当任一条件满足时，signal 取当前的 raw_sig，否则为0
+        df["signal"] = df["raw_sig"].where(condition_a | condition_b, 0)
+```
+**这个逻辑的效果：**
+* `raw_sig`: `0 -> 1 -> 1 -> 0 -> -1 -> -1 -> 0 -> 1 (平仓后再次满足)`
+* `signal`:  `0 -> 1 -> 0 -> 0 -> -1 ->  0 -> 0 -> 1 (如果平仓后 prev_raw_sig 能视为0或不同)`
 
-        # 识别上升趋势的最后一天
-        for i in range(1, len(trend_flag_series)):
-            if trend_flag_series.iloc[i-1] == 1 and trend_flag_series.iloc[i] != 1:
-                last_days_of_uptrends.append(trend_flag_series.index[i-1])
+这个逻辑在 `raw_sig` 持续为同一非零值时，`signal` 会是0。它会在 `raw_sig` 首次从0变为非0时，或 `raw_sig` 符号改变时产生信号。
+**对于您“同趋势下平仓后”的场景：**
+- 假设Day N平仓，`pos=0`。
+- Day N的 `raw_sig` 可能是导致平仓的信号（比如反向）或者是0（如果止损/止盈）。
+- Day N+1，如果震荡市RSI条件满足，`raw_sig` (Day N+1) = 1。
+  - 如果 `raw_sig` (Day N) 是0，那么 `condition_a` 满足，`signal` (Day N+1) = 1。**这样就能再入场了。**
+  - 如果 `raw_sig` (Day N) 是-1 (例如反向平仓)，那么 `condition_b` 满足，`signal` (Day N+1) = 1。**也能再入场。**
+
+这个版本的 `signal` 逻辑比之前考虑 `trend_flag` 变化的版本更能处理“平仓后同 `raw_sig` 值再入场”的问题，只要平仓当天的 `raw_sig` 与之后重新产生的入场 `raw_sig` 之间存在一个0状态或者符号反转。
+
+**层面2：`backtest` 中的交易后冷却期（解决“不能close之后马上同向买入”）**
+
+如果您不希望在平仓（特别是止损平仓）后“马上”根据相同的条件再次入场，可以在 `backtest` 逻辑中引入一个短暂的“交易冷却期”。
+
+* **修改 `_close` 方法**：当一个仓位被平掉后，设置一个冷却计数器。
+    ```python
+    # 在 EnhancedTimingStrategy 类中
+    # def __init__(self, ...):
+    #     ...
+    #     self.trade_cooldown_period = 1 # 例如，平仓后冷却1天不允许再开仓
+
+    def _close(self, port, px):
+        # ... (您现有的平仓逻辑) ...
+        port.update({"pos":0, "stop":0, "tp":0, "half_exit":False, "trail":0})
+        port["active_trade_cooldown"] = self.trade_cooldown_period # 激活交易冷却期
+        print(f"Close: pos={port['pos']}, cash={port['cash']},  px={px}, stop={port['stop']}, tp={port['tp']}")
+        print(f"交易冷却期启动，剩余天数: {port['active_trade_cooldown']}")
+    ```
+
+* **修改 `backtest` 主循环**：在尝试开仓前检查并处理这个冷却期。
+    ```python
+    # 在 backtest 方法的 for 循环开始处
+    # for i, (dt, row) in enumerate(self.signals.iterrows()):
+        # ... (获取 px, sig, rv 等变量) ...
+
+        # 处理个别交易的冷却期
+        can_trade_this_bar = True
+        if port.get("active_trade_cooldown", 0) > 0:
+            port["active_trade_cooldown"] -= 1
+            print(f"{dt}: 交易冷却中，剩余 {port['active_trade_cooldown']} 天")
+            can_trade_this_bar = False
         
-        if not last_days_of_uptrends:
-            print("未找到已结束的上升趋势周期。")
-            return []
+        # ... (原有的止损、止盈逻辑) ...
 
-        all_events_data = []
+        # 开仓/加仓/反向的逻辑需要包裹在 can_trade_this_bar 条件内
+        if sig != 0 and not locked and can_trade_this_bar: # <--- 加入 can_trade_this_bar
+            if port["pos"] == 0:
+                print("open")
+                # ... self._open(...)
+            # ... (其他开仓逻辑)
+    ```
+通过这种方式，即使 `signal` 在平仓后的下一天就变为了1，`can_trade_this_bar` 也会因为交易冷却期而阻止立即开仓，达到了您“不能close之后马上同向买入”的效果。冷却期结束后，如果信号依然存在，就可以正常开仓。
 
-        for uptrend_end_date in last_days_of_uptrends:
-            print(f"\n>> 上升趋势结束于: {uptrend_end_date.strftime('%Y-%m-%d')}")
-            
-            try:
-                if uptrend_end_date in self.results.index:
-                    start_index_pos_in_results = self.results.index.get_loc(uptrend_end_date) + 1
-                else:
-                    potential_start_dates = self.results.index[self.results.index > uptrend_end_date]
-                    if potential_start_dates.empty:
-                        print(f"  警告: 在 {uptrend_end_date.strftime('%Y-%m-%d')} 之后未找到更多交易日数据。")
-                        continue
-                    start_index_pos_in_results = self.results.index.get_loc(potential_start_dates[0])
-            except KeyError:
-                print(f"  警告: 日期 {uptrend_end_date.strftime('%Y-%m-%d')} 在 self.results.index 中未找到或处理时出错。跳过此结束点。")
-                continue
+**关于您更具体的建议：“只要close了之后，之后后面raw=1同时有价格低于close之后设置的止盈止损，那么就可以买入？”**
 
-            daily_data_for_event = []
-            print(f"  获取之后 {num_days_to_get} 天的数据:")
-            for day_offset in range(num_days_to_get):
-                current_day_index_pos = start_index_pos_in_results + day_offset
-                if current_day_index_pos < len(self.results.index):
-                    current_analysis_date = self.results.index[current_day_index_pos]
-                    
-                    data_for_this_day = {'date': current_analysis_date.strftime('%Y-%m-%d')}
-                    
-                    # 从 self.df 获取 RSI_pct
-                    try:
-                        data_for_this_day['RSI_pct'] = self.df.loc[current_analysis_date, 'RSI_pct']
-                    except KeyError:
-                        data_for_this_day['RSI_pct'] = np.nan
+这个想法是定义一个非常特定的**再入场条件**，它本身可以成为 `raw_sig` 的一个来源。
+* “close了之后”：这个状态需要由回测逻辑感知。
+* “raw=1”：表明基础的买入意愿存在。
+* “价格低于close之后设置的止盈止损”：这个比较模糊。
+    * 平仓后，止盈止损价通常会清零。您可能指的是价格回落到了一个有吸引力的水平，例如低于上次的*退出价格*一定幅度，或者低于某个动态计算的支撑位。
+    * 如果您能明确这个“价格吸引力”条件，可以将其加入到 `is_ranging` 状态下（或其他状态下）生成 `raw_sig=1` 的判断逻辑中。
 
-                    # 从 self.signals 获取 raw_sig, signal, is_ranging
-                    try:
-                        data_for_this_day['raw_sig'] = self.signals.loc[current_analysis_date, 'raw_sig']
-                        data_for_this_day['signal'] = self.signals.loc[current_analysis_date, 'signal']
-                        data_for_this_day['is_ranging'] = (self.signals.loc[current_analysis_date, 'trend_flag'] == 0)
-                    except KeyError:
-                        data_for_this_day['raw_sig'] = np.nan
-                        data_for_this_day['signal'] = np.nan
-                        data_for_this_day['is_ranging'] = np.nan
+**总结与建议：**
 
-                    # 从 self.results 获取 cooldown_active, locked_active, pos
-                    # 之前的检查已保证列存在，这里直接访问
-                    data_for_this_day['cooldown_active'] = self.results.loc[current_analysis_date, 'cooldown_active']
-                    data_for_this_day['locked_active'] = self.results.loc[current_analysis_date, 'locked_active']
-                    data_for_this_day['pos'] = self.results.loc[current_analysis_date, 'pos']
-                    
-                    daily_data_for_event.append(data_for_this_day)
+1.  **优先采纳层面1的 `signal` 生成逻辑修改**：使用基于 `(prev_raw_sig == 0) & (df["raw_sig"] != 0)` 或 `(np.sign(prev_raw_sig) != np.sign(df["raw_sig"]))` 的条件。这比仅依赖 `raw_sig` 数值变化或 `trend_flag` 变化更为鲁棒，更容易在平仓后（如果平仓导致 `raw_sig` 变为0或反向）重新触发有效信号。
+2.  **考虑层面2的交易后冷却期**：如果您想避免过于迅速的同向再入场（尤其是在止损后），在 `backtest` 中加入一个短暂的 `trade_cooldown_period` 是一个简单有效的方法。
+3.  **关于您的特定再入场条件**：如果您想实现“价格低于某个参考点（如前次退出价）”作为再入场条件的一部分，这应该体现在 `raw_sig` 的生成规则中。例如，在震荡市产生 `raw_sig=1` 时，额外增加一个价格相关的过滤条件。
 
-                    # --- 开始修正 print 语句 ---
-                    rsi_pct_val = data_for_this_day.get('RSI_pct')
-                    rsi_pct_str = f"{rsi_pct_val:.2f}" if pd.notna(rsi_pct_val) else 'N/A'
-                    
-                    raw_sig_val = data_for_this_day.get('raw_sig')
-                    raw_sig_str = str(raw_sig_val) if pd.notna(raw_sig_val) else 'N/A' # 直接转str，适用于数字
-                    
-                    signal_val = data_for_this_day.get('signal')
-                    signal_str = str(signal_val) if pd.notna(signal_val) else 'N/A' # 直接转str，适用于数字
-                    
-                    is_ranging_val = data_for_this_day.get('is_ranging') # 这个值可能是 True, False, 或者 np.nan
-                    if pd.notna(is_ranging_val):
-                        ranging_str = '是' if is_ranging_val == True else '否'
-                    else:
-                        ranging_str = 'N/A'
-                        
-                    cooldown_active_val = data_for_this_day.get('cooldown_active') # 这个值是 True 或 False
-                    if pd.notna(cooldown_active_val): # 确保它不是从KeyError来的np.nan
-                        cooldown_str = '是' if cooldown_active_val == True else '否'
-                    else: # 如果因为某种原因变成np.nan
-                        cooldown_str = 'N/A'
-
-                    locked_active_val = data_for_this_day.get('locked_active') # 这个值是 True 或 False
-                    if pd.notna(locked_active_val): # 确保它不是从KeyError来的np.nan
-                        locked_str = '是' if locked_active_val == True else '否'
-                    else: # 如果因为某种原因变成np.nan
-                        locked_str = 'N/A'
-                    
-                    pos_val = data_for_this_day.get('pos')
-                    pos_str = str(pos_val) if pd.notna(pos_val) else 'N/A' # 直接转str，适用于数字
-
-                    print(f"    {data_for_this_day['date']}: "
-                          f"RSI_pct={rsi_pct_str}, "
-                          f"raw_sig={raw_sig_str}, "
-                          f"signal={signal_str}, "
-                          f"ranging={ranging_str}, "
-                          f"cooldown={cooldown_str}, "
-                          f"locked={locked_str}, "
-                          f"pos={pos_str}")
-                    # --- 结束修正 print 语句 ---
-                else:
-                    print(f"    在为 {uptrend_end_date.strftime('%Y-%m-%d')} 获取后续数据时，数据不足 {num_days_to_get} 天。仅获取到 {day_offset} 天。")
-                    break
-            
-            all_events_data.append({
-                'uptrend_end_date': uptrend_end_date.strftime('%Y-%m-%d'),
-                'consecutive_days_data': daily_data_for_event
-            })
-        return all_events_data
+建议您先尝试第一种 `signal` 逻辑的修改，看看是否解决了您在截图中观察到的主要问题。如果解决了，再根据需要考虑加入交易冷却期或更复杂的再入场条件。
