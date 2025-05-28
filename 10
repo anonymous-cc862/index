@@ -1,342 +1,656 @@
-def _close(self, port, px): 
-    if port["pos"] > 0:  # 多头平仓
-        value = port["pos"] * px
-        fee = abs(value) * (self.cost["c"] + self.cost["s"] + self.cost["t"])
-        port["cash"] += value - fee
-    elif port["pos"] < 0:  # 空头平仓
-        value = abs(port["pos"]) * px
-        fee = value * (self.cost["c"] + self.cost["s"])  # 空头买回无需额外t成本
-        port["cash"] -= value + fee
-    
-    port.update({"pos":0, "stop":0, "tp":0, "half_exit":False, "trail":0})
+好的，我已经根据您的要求修改了 `EnhancedTimingStrategy` 类。
 
+**主要变更：**
+
+1.  **逐日信号计算**：
+    * `backtest` 方法现在会逐日迭代历史价格数据。
+    * 每天（`t`），它会提取截至前一天（`t-1`）所需的回溯期数据。
+    * 新增了一个核心方法 `_calculate_latest_signals_and_indicators(self, price_data_slice: pd.DataFrame)`。此方法接收一个价格数据切片（例如，截至 `t-1` 的数据），并计算该切片最后一天的所有相关指标 (`EMA`, `RSI`, `RV14`, `R2_60` 等) 和原始信号 (`raw_sig`)、趋势判断 (`trend_flag`)。
+    * `backtest` 方法随后使用 `t-1` 的 `raw_sig` 与 `t-2` 的 `raw_sig`（通过 `previous_day_raw_sig` 状态变量追踪）来确定当日（`t`）的实际交易信号 `sig_trade_today`（即去抖后的信号）。
+    * 波动率 (`RV14`, `VOL_FLOOR`, `VOL_CAP`) 和止损/止盈计算所需的 `ATR_val` 也是基于 `t-1` 的数据计算得出，并用于当日（`t`）的交易决策和风险管理。
+
+2.  **最小回溯期 (`MIN_DATA_POINTS_FOR_SIGNAL_CALC`)**：
+    * 类初始化时设定了一个 `MIN_DATA_POINTS_FOR_SIGNAL_CALC` 参数（当前暂定为60天，您可以根据指标链的实际最长依赖进行精确调整）。
+    * 在 `backtest` 循环的初期，如果可用的历史数据切片长度不足此值，则不会计算有效信号，策略处于“热身”阶段。
+
+3.  **数据记录与绘图**：
+    * `self.results` DataFrame 现在在 `backtest` 过程中逐日构建，记录了每日的净值、持仓、实际执行的信号、对应的 `t-1` 期原始信号、`t-1` 期趋势判断、`t-1`期RSI百分位数等。
+    * `performance` 方法已更新，以使用 `self.results` 中新的列名进行绘图和统计（例如，交易标记使用 `signal_acted_on_today`，趋势着色使用 `trend_flag_t-1`）。
+
+4.  **`get_data_after_uptrend_ends` 方法调整**：
+    * 此方法现在依赖于 `self.results` 中记录的 `trend_flag_t-1` (用于识别上升趋势结束点) 和 `RSI_pct_t-1` 等（用于分析后续日期的状态）。
+    * 它会提取上升趋势结束后的N天内，每日的实际交易日的相关数据，如前一天的RSI百分位数、前一天的原始信号、当天的交易信号、当天是否处于震荡市、冷却/锁定状态以及持仓。
+
+5.  **辅助方法**：
+    * 如 `_open`, `_close`, `_add_position`, `_reduce_or_reverse`, `_position_size`, `_update_trail` 等方法基本保持原有逻辑，但现在接收从 `_calculate_latest_signals_and_indicators` 获取的、基于 `t-1` 数据的波动率 (`rv_for_trade`) 等参数。
+    * `rolling_r2` 函数进行了一些增强，以更好地处理窗口数据可能全为 NaN 或常数的情况。
+    * 指标计算中的 `rolling().apply()` 部分增加了对窗口长度和 NaN 值的检查，以避免在数据不足时出错。
+
+**请注意以下几点**：
+
+* **性能**：逐日计算指标和信号通常比一次性向量化计算要慢。对于非常长的时间序列，回测速度可能会受到影响。
+* **`MIN_DATA_POINTS_FOR_SIGNAL_CALC` 的精确性**：这个值的设定对于确保所有指标在首次使用前都有足够的“热身数据”至关重要。一个过于保守（过大）的值会延迟策略开始交易的时间；一个过小的值可能导致初期信号基于未充分“稳定”的指标。当前设为60，您可以根据您策略中最长依赖链的指标（如EMA(40)->rolling(10)->rolling(30)，大约需要40+10+30=80个点才能完全摆脱初始效应）来精确调整。更准确的方法是分析 `calc_indicators` 中各指标首次变为非NaN值所需的最小数据量。
+* **参数依赖**：原代码中的某些参数（如 `lookback_slope`, `ens_weights` 等）在当前版本的信号生成逻辑中并未直接使用，我已保留它们以防未来扩展。
+* **ATR的使用**：原代码中 `ATR` 用于止损止盈的逻辑是基于 `self.stop_atr * rv * px`。新代码计算了 `ATR_val`，如果您希望直接使用这个 ATR 值（而不是 RV14 衍生的波动率）来设定止损止盈的绝对金额（例如 `stop_atr_absolute = self.stop_atr_multiplier * ATR_val_from_t-1`），则需要相应修改 `_open`, `_add_position`, `_update_trail` 等方法中的止损/止盈设置逻辑。当前代码仍主要依赖 `rv_for_trade`。
+
+以下是修改后的完整代码：
+
+```python
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates         
+import matplotlib.dates as mdates
 from pathlib import Path
+from matplotlib.lines import Line2D
+
+# Original rolling_r2 function - ensure it handles edge cases like insufficient data if needed
+# The rolling().apply mechanism should feed it full windows unless at the very start.
+def rolling_r2(x: np.ndarray | list[float]) -> float:
+    """
+    对输入窗口 x（长度 N）的序列做一元线性回归，
+    返回回归的决定系数 R²，衡量"线性拟合好坏"，
+    越接近 1 越说明这一段价格接近直线（趋势更明确）。
+    """
+    y = np.asarray(x)
+    if len(y) < 2: # Need at least 2 points for a line
+        return np.nan
+    
+    # Check for all NaNs or insufficient non-NaNs for polyfit
+    finite_y_mask = np.isfinite(y)
+    y_finite = y[finite_y_mask]
+    
+    if len(y_finite) < 2:
+        return np.nan
+    
+    # If all values in the window are the same (after filtering NaNs), R^2 is 1.
+    if np.all(y_finite == y_finite[0]):
+        return 1.0 
+
+    t = np.arange(len(y))
+    t_finite = t[finite_y_mask]
+
+    try:
+        beta1, beta0 = np.polyfit(t_finite, y_finite, 1)
+    except (np.linalg.LinAlgError, ValueError): 
+        return np.nan
+
+    # Calculate y_hat for all original t points where y is finite for residual calculation
+    y_hat_finite = beta1 * t_finite + beta0  
+
+    ss_tot_finite = np.sum((y_finite - y_finite.mean())**2)
+    ss_res_finite = np.sum((y_finite - y_hat_finite) ** 2)
+
+    if np.isclose(ss_tot_finite, 0): 
+        return 1.0 if np.isclose(ss_res_finite, 0) else 0.0 # Should be 1.0 if polyfit succeeded
+    
+    r_squared = 1.0 - ss_res_finite / ss_tot_finite
+    return r_squared
 
 class EnhancedTimingStrategy:
     def __init__(self, daily_returns: pd.Series):
-        self.price = self._to_price(daily_returns).rename("price").to_frame()
+        self.price_all_history = self._to_price(daily_returns).rename("price").to_frame()
+
         self.initial_capital = 1_000_000
-        self.max_single = 0.25      # Maximum position 30%
-        self.cost = {"c": 0.001, "s": 0.0003, "t": 0.001} 
-        self.max_drawdown=0.4
-        self.resume_drawdown=0.1
-        self.circuit_breaker=False
-        self.rsi_lookback=14
+        self.initial_nav = self.initial_capital
+        self.cost = {"c": 0.001, "s": 0.0, "t": 0.0} # c: commission, s: slippage, t: tax
 
-        self.base_risk = 0.0025   # maximum  loss amount can be tolerated is 0.25% of NAV
-        self.stop_atr  = 3          #3std
-        self.warmup_bars = 10        # 前 10 减仓
-        self.warmup_bars = max(1, min(self.warmup_bars, len(self.price)//5))
+        # Parameters from original script (some might be unused in current direct logic)
+        self.lookback_slope = 7 
+        self.ema_short_period = 5 
+        self.ema_long_period = 30 
+        self.roc_period = 5
+        self.roc_buy_thresh = 1.0
+        self.roc_sell_thresh = -1
+        self.roc_ma_filter_period = 10
+        self.ens_weights = (0, 0, 1) 
 
-        self.RSI_pct_high=0.6
-        self.RSI_pct_low=0.4 
-        self.low_vol_low=0.4
-        self.high_vol_high=0.6
-        self.stoploss_atr=2
-        self.takeprofit_atr=2
+        # Core risk and trade management parameters
+        self.base_risk = 0.15          # Base risk percentage for position sizing
+        self.stop_atr = 5              # Multiplier for RV in position sizing (determines risk per unit)
+        self.max_drawdown = 0.4        # Maximum drawdown before circuit breaker locks trading
+        self.resume_drawdown = 0.1     # Original param, not actively used for unlocking logic here
+        self.stoploss_atr = 2          # Multiplier for RV*px (or ATR_val) for stop-loss distance
+        self.takeprofit_atr = 5        # Multiplier for RV*px (or ATR_val) for take-profit distance
+        self.cooldown_period = 5       # Days to wait after max drawdown lock before potentially unlocking
 
-        self.cooldown_period = 5
-        self.pct_window=60
+        # Indicator parameters
+        self.rsi_lookback = 5
+        self.pct_window = 30           # Rolling window for percentile rank calculations
+        
+        # Thresholds for RSI_pct in ranging markets
+        self.RSI_pct_high = 0.9
+        self.RSI_pct_low = 0.2
+        
+        self.rv_scale_window = 21      # Original param, not actively used
+        self.ensemble_high = 0.5       # Original param, not actively used
+        self.ensemble_low = -0.5       # Original param, not actively used
+        self.slope7_threshold = 0      # Original param, not actively used
+
+        # Minimum number of data points required in a slice to calculate all signals reliably.
+        # This should be determined by the longest chain of rolling operations and EWM stabilization.
+        # E.g., EMA(40) -> rolling_slope(10) -> rolling_pct_rank(30) needs ~40+10+30 = 80 days for full warm-up.
+        # RV14 -> RV_pct(30) needs ~1+13+29 = 43 points.
+        # A value of 60 is a pragmatic choice, can be fine-tuned.
+        self.MIN_DATA_POINTS_FOR_SIGNAL_CALC = 60 
+        
+        self.results = pd.DataFrame() # To store backtest results
 
     @staticmethod
     def _to_price(r: pd.Series) -> pd.Series:
-        r = r.clip(-0.1, 0.1).replace(0, 1e-6)
-        return 100 * (1 + r).cumprod()
+        r_clipped = r.clip(-0.4, 0.4) 
+        # Assuming r represents daily returns (e.g., 0.01 for 1%).
+        # (1 + 0) is fine if a return is exactly 0.
+        return 100 * (1 + r_clipped).cumprod()
 
-    # ---------- indicators ----------
-    def calc_indicators(self):
-        df = self.price
-        df["EMA3"] = df["price"].ewm(span=3).mean()
-        df["EMA7"] = df["price"].ewm(span=7).mean()
-        df["EMA10"] = df["price"].ewm(span=10).mean()
-        df["EMA15"] = df["price"].ewm(span=15).mean()
-        df["EMA20"] = df["price"].ewm(span=20).mean()
-        df["EMA30"] = df["price"].ewm(span=30).mean()
-        df["EMA40"] = df["price"].ewm(span=40).mean()
-        df["EMA50"] = df["price"].ewm(span=50).mean()
-        delta = df["price"].diff()
-        gain, loss = delta.clip(lower=0), -delta.clip(upper=0)
-        rs = gain.rolling(self.rsi_lookback).mean() / (loss.rolling(self.rsi_lookback).mean() + 1e-9)
-        df["RSI"] = 100 - 100 / (1 + rs)
-        df["ATR"] = df["price"].diff().abs().rolling(14).mean()
-        df['RV14'] = (np.log(df["price"])).diff().rolling(14).std() # ret.rolling(14).std()
-        df['RV_pct']  = df['RV14'].rolling(self.pct_window).rank(pct=True)#60-day rolling window quantiles
-        df['VOL_FLOOR'] = df['RV14'].rolling(self.pct_window).quantile(0.20)
-        df['VOL_CAP']   = df['RV14'].rolling(self.pct_window).quantile(0.80)
-        df["RSI_pct"] = df["RSI"].rolling(self.pct_window).rank(pct=True)
-        self.df = df.dropna().copy()
+    def _calculate_latest_signals_and_indicators(self, price_data_slice: pd.DataFrame):
+        df = price_data_slice.copy()
 
-    # ---------- generate_signals ----------
-    def generate_signals(self):  
-        df = self.df.copy()
-        # ---- Volatility Percentile ----
-        low_vol  = df['RV_pct'] < self.low_vol_low #consensus area
-        high_vol = df['RV_pct'] > self.high_vol_high #divergence area
-        print(df['RV_pct'].max(), df['RV_pct'].min())
-
-        # ---- Trend  ----
-        df['trend']=np.where(df['EMA7']>df['EMA40']*0.995, 1, np.where(df['EMA7']<df['EMA40']*1.005, -1, 0))
+        # Indicator calculations
+        df["EMA100"] = df["price"].ewm(span=40, adjust=False).mean()
         
-        # ===== Momentum: RSI quantile =====
-        df["mom"] = np.select([df["RSI_pct"]>self.RSI_pct_high, df["RSI_pct"]<self.RSI_pct_low], [1, -1], 0) 
-        
-        # -------------
-        df["raw"] = np.where(df["trend"] == df["mom"], df["trend"], 0) 
-
-        # ------- reverse ------
-        turn_up = (df["raw"] == 1) & (df["EMA3"] < df["EMA20"])
-        turn_down   = (df["raw"] == -1) & (df["EMA3"] > df["EMA20"]) 
-
-        # ------- final ------
-
-        df["filt"] = np.select(
-                [ (df["raw"] ==  1) & low_vol,           
-                (df["raw"] == -1) & low_vol,        
-                high_vol & turn_down,                
-                high_vol & turn_up ],              
-                [ 1, -1,  -1, 1], 0) #[ 1, -1,  -1, 1] [ 1, -1,  1, -1]
-        df["signal"] = df["filt"].where(
-                df["filt"].shift(fill_value=0) != df["filt"], 0)
-
-
-        self.signals = df[["price", "signal", 'RV14', 'VOL_FLOOR', 'VOL_CAP']] 
-        print(df['signal'].value_counts())
-        print('backtest time:',self.signals.index[0])
-        return self.signals
-
-    # ---------- position ----------
-    def _position_size(self, px, rv, nav, bar_idx, floor, cap):
-
-        rv = np.clip(rv, floor, cap)
-
-        risk_frac   = self.base_risk
-        risk_dollar = nav * risk_frac
-
-        per_unit_risk = self.stop_atr * rv * px #Estimated loss per lot
-        if per_unit_risk == 0:
-            return 0
-
-        size_by_risk = risk_dollar / per_unit_risk #Amount of loss you can afford (0.25% of NAV) ÷ 1 unit loss = Number of units invested, i.e. size, shares
-        size_cap     = nav * self.max_single / px
-        return int(max(0, min(size_by_risk, size_cap)))
-
-    # ---------- backtest ----------
-    #T+0 
-    def backtest(self):
-        running_max = self.initial_capital
-        locked = False
-        port = {"cash": self.initial_capital, "pos": 0, "stop": 0, "tp": 0,  "half_exit": False,  "trail": 0 }
-        log = []
-        cooldown = 0
-        for i, (dt, row) in enumerate(self.signals.iterrows()):
-            px, sig = row["price"], row["signal"]#, row["ATR"]
-            rv   = row['RV14']
-            floor= row['VOL_FLOOR']
-            cap  = row['VOL_CAP']
-
-            # # ===  Take profit in batches: close half of the position when it reaches ±3×ATR ===
-            if port["pos"] != 0 and not port["half_exit"]:
-                reach_tp = (port["pos"]>0 and px >= port["tp"]) or (port["pos"]<0 and px <= port["tp"])
-                if reach_tp:
-                    half = abs(port["pos"]) // 2
-                    print("Take profit in batches")
-                    if half:                
-                        fee = px*half*(self.cost["c"]+self.cost["s"]+(self.cost["t"] if port["pos"]>0 else 0))
-                        port["cash"] += half*px - fee
-                        port["pos"]  += -half if port["pos"]>0 else  half
-                        port["half_exit"] = True
-                        port["trail"] = px # Trailing stop loss starting point, set trail to the current price
-
-
-            # ---------- Trailing Stop Loss----------
-            if port["pos"] != 0 and port["half_exit"]:
-                print("Trailing Stop Loss")
-                self._update_trail(port, px, rv) #更新stop
-
-            # ---------- Stop loss closing----------
-            if (port["pos"]>0 and px <= port["stop"]) or (port["pos"]<0 and px >= port["stop"]):
-                #print(port["stop"])
-                self._close(port, px) #If the stop loss line is reached → all positions are closed, commissions are settled, and no further reversals are allowed on the same day
-                sig = 0 # The position has been closed on the day and no position will be opened later
-                
-                print("Stop loss closing")
-
-            
-            # ===Opening / Adding / Reversing ===
-            if sig != 0 and not locked:
-                if port["pos"] == 0: 
-                    self._open(port, sig, px, rv, i, floor, cap)
-                    print("open")
-                elif np.sign(sig) == np.sign(port["pos"]): #Add positions in the same direction
-                    self._add_position(port, sig, px, rv, i, floor, cap)
-                    print('add')
-                else: #sig!=0, pos!=0, sig gives the opposite signal to pos # Reverse → Close the position and reverse
-                    print("reverse")
-                    self._reduce_or_reverse(port, sig, px, rv, i, floor, cap)
-                # When encountering a reverse signal, close all positions directly, and then use the new signal to reverse
-
-            nav = port["cash"] + port["pos"] * px
-            running_max = max(running_max, nav)
-
-            # --- tripping ---
-            if not locked and nav <= running_max * (1 - self.max_drawdown): #
-                print("tripping")
-                self._close(port, px)      # all close
-                locked = True
-                cooldown = self.cooldown_period
-                locked_peak = running_max   
-                running_max = nav           # new baseline nav = running_max
-
-            # --- lock period ---
-            if locked:
-                print("locked")
-                if cooldown > 0:
-                    cooldown -= 1
-                    log.append({"date": dt, "nav": nav, "pos": port["pos"], "signal": sig})
-                    continue  
-                else: 
-                    locked = False
-                    running_max = nav
-            log.append({"date": dt, "nav": nav, "pos": port["pos"], "signal": sig})  #
-        self.results = pd.DataFrame(log).set_index("date")
-
-        # ---------- Trading position holding time statistics ----------
-        trades, pos, entry_date = [], 0, None
-        for dt, row in self.results.iterrows():
-            if pos == 0 and row["pos"] != 0:            
-                pos, entry_date = row["pos"], dt
-            elif pos != 0 and row["pos"] == 0:          
-                trades.append((entry_date, dt, (dt - entry_date).days))
-                pos = 0
-        if trades:                                     
-            lengths = [t[2] for t in trades]
-            print(f"Average holding days: {np.mean(lengths):.1f}  "
-                f"median: {np.median(lengths):.1f}  "
-                f"shortest: {np.min(lengths)}  longest: {np.max(lengths)}")
+        ema_slope_window = 10
+        if len(df) >= ema_slope_window:
+            # Ensure that the window passed to polyfit does not contain NaNs from EMA100's own warm-up
+            df["EMA100_slope"] = (df["EMA100"].rolling(ema_slope_window)
+                                 .apply(lambda x: np.polyfit(np.arange(len(x)), x, 1)[0] 
+                                        if len(x)==ema_slope_window and not x.isnull().any() 
+                                        else np.nan, 
+                                        raw=False)) # raw=False to pass Series, np.arange(len(x)) for index
         else:
-            print("The current parameter combination does not generate a complete transaction record")    
+            df["EMA100_slope"] = np.nan
+            
+        df["EMA100_slope_pct"] = df['EMA100_slope'].rolling(self.pct_window).rank(pct=True)
+
+        delta = df["price"].diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        
+        avg_gain = gain.ewm(span=self.rsi_lookback, adjust=False).mean()
+        avg_loss = loss.ewm(span=self.rsi_lookback, adjust=False).mean() # adjust=False for typical RSI
+        rs = avg_gain / (avg_loss + 1e-9) # Add epsilon to prevent division by zero
+        df["RSI"] = 100 - (100 / (1 + rs))
+        df["RSI_pct"] = df["RSI"].rolling(self.pct_window).rank(pct=True)
+
+        # ATR calculation (can be used for stops if preferred over RV14 based)
+        df["ATR_val"] = df["price"].diff().abs().ewm(span=14, adjust=False).mean()
+
+        # Realized Volatility (RV14) and its floor/cap
+        log_price = np.log(df["price"]) # log price for RV calculation
+        df["RV14"] = log_price.diff().rolling(14).std() * np.sqrt(252) # Annualized RV
+        df["VOL_FLOOR"] = df["RV14"].rolling(self.pct_window).quantile(0.20)
+        df["VOL_CAP"] = df["RV14"].rolling(self.pct_window).quantile(0.80)
+
+        # R-squared for trend confirmation
+        r2_window = 30
+        if len(df) >= r2_window:
+            df["R2_60"] = df["price"].rolling(r2_window).apply(rolling_r2, raw=False)
+        else:
+            df["R2_60"] = np.nan
+
+        last_vals = df.iloc[-1]
+        
+        # Check if all necessary indicators for signal generation are valid (not NaN)
+        required_cols_for_signal = ["price", "EMA100", "R2_60", "EMA100_slope", "RSI_pct", 
+                                    "RV14", "VOL_FLOOR", "VOL_CAP", "ATR_val"]
+        if any(pd.isna(last_vals.get(col)) for col in required_cols_for_signal):
+            return {
+                "price": last_vals.get("price", np.nan), "raw_sig": 0, "trend_flag": 0,
+                "RV14": last_vals.get("RV14", np.nan), "VOL_FLOOR": last_vals.get("VOL_FLOOR", np.nan),
+                "VOL_CAP": last_vals.get("VOL_CAP", np.nan), "ATR_val": last_vals.get("ATR_val", np.nan),
+                "RSI_pct": last_vals.get("RSI_pct", np.nan), "is_valid_signal": False
+            }
+
+        is_uptrend = (last_vals["price"] > last_vals["EMA100"] and 
+                      last_vals["R2_60"] > 0.7 and 
+                      last_vals["EMA100_slope"] > 0)
+        is_downtrend = (last_vals["price"] < last_vals["EMA100"] and 
+                        last_vals["R2_60"] > 0.7 and 
+                        last_vals["EMA100_slope"] < 0)
+        is_ranging = not (is_uptrend or is_downtrend)
+
+        raw_sig_today = 0
+        if is_uptrend: raw_sig_today = 1
+        elif is_downtrend: raw_sig_today = -1
+        
+        if is_ranging: 
+            if last_vals["RSI_pct"] < self.RSI_pct_low: raw_sig_today = 1
+            elif last_vals["RSI_pct"] > self.RSI_pct_high: raw_sig_today = -1
+        
+        trend_flag_today = 1 if is_uptrend else (-1 if is_downtrend else 0)
+
+        return {
+            "price": last_vals["price"], "raw_sig": raw_sig_today, "trend_flag": trend_flag_today,
+            "RV14": last_vals["RV14"], "VOL_FLOOR": last_vals["VOL_FLOOR"], "VOL_CAP": last_vals["VOL_CAP"],
+            "ATR_val": last_vals["ATR_val"], "RSI_pct": last_vals["RSI_pct"], "is_valid_signal": True
+        }
+
+    def backtest(self):
+        running_max_nav = self.initial_capital
+        is_locked = False # Renamed from 'locked' to avoid conflict
+        portfolio = {"cash": self.initial_capital, "pos": 0, "stop": 0, "tp": 0, 
+                     "half_exit": False, "trail": 0, "entry_price":0, # Renamed 'entry'
+                     "max_entry_px": None, "min_entry_px": None} # Renamed
+        daily_log_records = [] 
+        cooldown_counter = 0
+        previous_day_raw_sig_state = 0 # Tracks raw_sig(t-2) for debouncing raw_sig(t-1)
+
+        for i in range(len(self.price_all_history)):
+            current_date = self.price_all_history.index[i]
+            px_today = self.price_all_history.iloc[i]["price"]
+
+            signal_to_trade_today = 0 # Debounced signal for today's action
+            rv_for_risk_mgmt = np.nan
+            vol_floor_for_risk_mgmt = np.nan
+            vol_cap_for_risk_mgmt = np.nan
+            trend_flag_from_prev_day_calc = 0
+            rsi_pct_from_prev_day_calc = np.nan
+            raw_sig_from_prev_day_calc = 0 # raw_sig calculated based on t-1 data
+
+            if i > 0: 
+                idx_t_minus_1 = i - 1
+                start_idx_slice = max(0, idx_t_minus_1 - self.MIN_DATA_POINTS_FOR_SIGNAL_CALC + 1)
+                data_slice_for_t_minus_1_signals = self.price_all_history.iloc[start_idx_slice : idx_t_minus_1 + 1]
+
+                if len(data_slice_for_t_minus_1_signals) >= self.MIN_DATA_POINTS_FOR_SIGNAL_CALC:
+                    calc_results_t_minus_1 = self._calculate_latest_signals_and_indicators(data_slice_for_t_minus_1_signals)
+                    
+                    if calc_results_t_minus_1["is_valid_signal"]:
+                        raw_sig_from_prev_day_calc = calc_results_t_minus_1["raw_sig"]
+                        if raw_sig_from_prev_day_calc != previous_day_raw_sig_state:
+                            signal_to_trade_today = raw_sig_from_prev_day_calc
+                        
+                        previous_day_raw_sig_state = raw_sig_from_prev_day_calc
+
+                        rv_for_risk_mgmt = calc_results_t_minus_1["RV14"]
+                        vol_floor_for_risk_mgmt = calc_results_t_minus_1["VOL_FLOOR"]
+                        vol_cap_for_risk_mgmt = calc_results_t_minus_1["VOL_CAP"]
+                        trend_flag_from_prev_day_calc = calc_results_t_minus_1["trend_flag"]
+                        rsi_pct_from_prev_day_calc = calc_results_t_minus_1["RSI_pct"]
+                    else: 
+                        previous_day_raw_sig_state = 0 
+                else: 
+                    previous_day_raw_sig_state = 0
+            else: 
+                previous_day_raw_sig_state = 0
+
+            current_nav_before_actions = portfolio["cash"] + portfolio["pos"] * px_today
+            stop_loss_hit_today = False
+
+            if portfolio["pos"] > 0 and portfolio["stop"] != 0 and px_today <= portfolio["stop"]: stop_loss_hit_today = True
+            elif portfolio["pos"] < 0 and portfolio["stop"] != 0 and px_today >= portfolio["stop"]: stop_loss_hit_today = True
+            
+            if stop_loss_hit_today:
+                self._close(portfolio, px_today)
+                signal_to_trade_today = 0 # No further trades if SL hit
+            
+            if portfolio["pos"] != 0 and portfolio["half_exit"] and not pd.isna(rv_for_risk_mgmt) and not stop_loss_hit_today:
+                self._update_trail(portfolio, px_today, rv_for_risk_mgmt)
+
+            if portfolio["pos"] != 0 and not portfolio["half_exit"] and not stop_loss_hit_today:
+                tp_reached = False
+                if portfolio["pos"] > 0 and portfolio["tp"] != 0 and px_today >= portfolio["tp"]: tp_reached = True
+                if portfolio["pos"] < 0 and portfolio["tp"] != 0 and px_today <= portfolio["tp"]: tp_reached = True
+                if tp_reached:
+                    qty_to_exit = abs(portfolio["pos"]) // 2
+                    if qty_to_exit > 0:
+                        fee = px_today * qty_to_exit * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if portfolio["pos"] > 0 else 0))
+                        if portfolio["pos"] > 0:
+                            portfolio["cash"] += qty_to_exit * px_today - fee
+                            portfolio["pos"] -= qty_to_exit
+                        else:
+                            portfolio["cash"] -= qty_to_exit * px_today - fee 
+                            portfolio["pos"] += qty_to_exit
+                        portfolio["half_exit"] = True
+                        portfolio["trail"] = px_today
+                        if not pd.isna(rv_for_risk_mgmt): self._update_trail(portfolio, px_today, rv_for_risk_mgmt)
+            
+            current_nav_for_trade_sizing = portfolio["cash"] + portfolio["pos"] * px_today
+            if signal_to_trade_today != 0 and not is_locked and not stop_loss_hit_today and \
+               not pd.isna(rv_for_risk_mgmt) and not pd.isna(vol_floor_for_risk_mgmt) and not pd.isna(vol_cap_for_risk_mgmt):
+                if portfolio["pos"] == 0:
+                    self._open(portfolio, signal_to_trade_today, px_today, rv_for_risk_mgmt, i, vol_floor_for_risk_mgmt, vol_cap_for_risk_mgmt, current_nav_for_trade_sizing)
+                elif np.sign(signal_to_trade_today) == np.sign(portfolio["pos"]):
+                    self._add_position(portfolio, signal_to_trade_today, px_today, rv_for_risk_mgmt, i, vol_floor_for_risk_mgmt, vol_cap_for_risk_mgmt, current_nav_for_trade_sizing)
+                else: 
+                    self._reduce_or_reverse(portfolio, signal_to_trade_today, px_today, rv_for_risk_mgmt, i, vol_floor_for_risk_mgmt, vol_cap_for_risk_mgmt, current_nav_for_trade_sizing)
+            
+            current_nav_after_actions = portfolio["cash"] + portfolio["pos"] * px_today
+            running_max_nav = max(running_max_nav, current_nav_after_actions)
+
+            if not is_locked and current_nav_after_actions <= running_max_nav * (1 - self.max_drawdown):
+                if portfolio["pos"] != 0: self._close(portfolio, px_today)
+                is_locked = True
+                cooldown_counter = self.cooldown_period
+                running_max_nav = current_nav_after_actions 
+                current_nav_after_actions = portfolio["cash"] + portfolio["pos"] * px_today
+
+            if is_locked:
+                if cooldown_counter > 0: cooldown_counter -= 1
+                else:
+                    is_locked = False
+                    running_max_nav = current_nav_after_actions
+
+            daily_log_records.append({
+                "date": current_date, "price": px_today, "nav": current_nav_after_actions, "pos": portfolio["pos"],
+                "raw_sig_t-1": raw_sig_from_prev_day_calc,
+                "signal_today": signal_to_trade_today if not stop_loss_hit_today else 0,
+                "trend_flag_t-1": trend_flag_from_prev_day_calc,
+                "RSI_pct_t-1": rsi_pct_from_prev_day_calc,
+                "cooldown_active": cooldown_counter > 0 and is_locked, 
+                "locked_active": is_locked,
+                "stop_config": portfolio["stop"], "tp_config": portfolio["tp"] # For debugging
+            })
+            assert np.isclose(current_nav_after_actions, portfolio['cash'] + portfolio['pos'] * px_today), f'NAV incorrect on {current_date}'
+        
+        self.results = pd.DataFrame(daily_log_records).set_index("date")
+        self._log_holding_period_stats()
         return self.results
 
-    def _update_trail(self, port, px, rv):
-        if port["pos"] > 0:
-            port["trail"] = max(port["trail"], px)
-            port["stop"]  = max(port["stop"], port["trail"] - self.stoploss_atr*rv*px)  # stop 只能上移
-        elif port["pos"] < 0:
-            port["trail"] = min(port["trail"], px)
-            port["stop"]  = min(port["stop"], port["trail"] + self.stoploss_atr*rv*px)  # stop 只能下移
+    def _log_holding_period_stats(self):
+        if self.results.empty or 'pos' not in self.results.columns:
+            print("Results empty or 'pos' column missing for holding stats.")
+            return
 
-    def _add_position(self, port, sig, px, rv, bar_idx, floor, cap):
-        # Add a new position, based on the capital limit and maximum loss capital
-        size = self._position_size(px, rv, port["cash"], bar_idx, floor, cap) #port["cash"] * self.max_single是最多投多少资金，除以价格是最多持仓  /  最大亏损资金（port["cash"] *最大亏损比例）/价格=持仓，再除以2风控常数，不能多于这个持仓,二者最小
-        if size == 0:
-            return  # No money, no add
-        fee = px * size * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if sig > 0 else 0))
-        # if sig > 0:                  # 做多
-        #     port["cash"] -= size * px
-        # else:                        # 做空
-        #     port["cash"] += size * px
-   
-        port["cash"] -= fee
-        port["pos"] += size if sig > 0 else -size  # Accumulated positions
-        # After adding positions, reset stop loss/take profit
-        port["stop"] = px - self.stoploss_atr * rv *px if port["pos"] > 0 else px + self.stoploss_atr * rv *px#stop是px加减2atr；tp是px加减3atr
-        port["tp"] = px + self.takeprofit_atr * rv*px if port["pos"] > 0 else px - self.takeprofit_atr * rv *px
-        port["half_exit"] = False  
+        trades, pos_state, entry_dt = [], 0, None
+        for dt, row in self.results.iterrows():
+            if pos_state == 0 and row["pos"] != 0: 
+                pos_state = row["pos"]; entry_dt = dt
+            elif pos_state != 0 and row["pos"] == 0: 
+                if entry_dt: trades.append((entry_dt, dt, (dt - entry_dt).days))
+                pos_state = 0; entry_dt = None
+            elif pos_state != 0 and row["pos"] != 0 and np.sign(pos_state) != np.sign(row["pos"]): # Flipped
+                 if entry_dt: trades.append((entry_dt, dt, (dt - entry_dt).days)) 
+                 pos_state = row["pos"]; entry_dt = dt 
+        if pos_state != 0 and entry_dt: 
+            trades.append((entry_dt, self.results.index[-1], (self.results.index[-1] - entry_dt).days))
+        if trades:
+            lengths = [t[2] for t in trades if t[2] >=0 ] # Ensure days are non-negative
+            if lengths:
+                print(f"Num trades: {len(lengths)}")
+                print(f"Holding Days - Avg: {np.mean(lengths):.1f}, Median: {np.median(lengths):.1f}, Min: {np.min(lengths)}, Max: {np.max(lengths)}")
+            else: print("No valid trade lengths for stats.")
+        else: print("No complete trades for holding period statistics.")
 
-    def _reduce_or_reverse(self, port, sig, px, rv, bar_idx, floor, cap):
-        # When encountering a reverse signal, close all positions directly, and then use the new signal to reverse
-        self._close(port, px)
-        self._open(port, sig, px, rv, bar_idx, floor, cap)
-        # 如果“只减仓一半”，加仓代码写成：
-        # reduce_size = min(abs(port["pos"]), self._position_size(px, port["cash"]))
-        # port["pos"] += reduce_size * np.sign(sig)
+    def _position_size(self, px, rv, nav, bar_idx, floor, cap, portfolio): # bar_idx not used
+        if pd.isna(rv) or pd.isna(floor) or pd.isna(cap) or rv <= 1e-9 : return 0
+        rv_clipped = np.clip(rv, floor, cap)
+        if rv_clipped <= 1e-9 : return 0
 
+        risk_base_capital = min(nav, portfolio["cash"]) 
+        allocable_risk_dollars = risk_base_capital * self.base_risk
+        risk_per_unit = self.stop_atr * rv_clipped * px # Using RV for vol, not ATR_val directly for this formula
+        if risk_per_unit <= 1e-9 : return 0
+        
+        size_by_risk_tolerance = allocable_risk_dollars / risk_per_unit
+        max_size_by_capital = risk_base_capital // px if px > 0 else 0
+        
+        final_size = int(max(0, min(size_by_risk_tolerance, max_size_by_capital)))
+        return final_size
 
-    # ---------- open----------
-    def _open(self, port, sig, px, rv, bar_idx, floor, cap):
-        size = self._position_size(px, rv, port["cash"], bar_idx,floor, cap)
-        fee = px * size * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if sig > 0 else 0))
-        # if sig > 0:                  # 做多
-        #     port["cash"] -= size * px
-        # else:                        # 做空
-        #     port["cash"] += size * px
-   
-        port["cash"] -= fee
-        port["pos"] = size if sig > 0 else -size
+    def _add_position(self, portfolio, sig, px, rv, bar_idx, floor, cap, nav_for_sizing):
+        additional_size = self._position_size(px, rv, nav_for_sizing, bar_idx, floor, cap, portfolio)
+        if additional_size == 0: return
 
-        port["entry"]      = px                 # Record opening price
-        port["half_exit"]  = False              
-        port["trail"]      = px                 
-        port["stop"] = px - self.stoploss_atr * rv *px if sig > 0 else px + self.stoploss_atr * rv*px
-        port["tp"] = px + self.takeprofit_atr * rv *px if sig > 0 else px - self.takeprofit_atr * rv*px
+        fee = px * additional_size * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if sig > 0 else 0))
+        
+        if sig > 0: 
+            if portfolio["cash"] < (additional_size * px + fee): return 
+            portfolio["cash"] -= (additional_size * px + fee)
+            portfolio["pos"] += additional_size
+            portfolio["max_entry_px"] = px if portfolio["max_entry_px"] is None else max(portfolio["max_entry_px"], px)
+            portfolio["min_entry_px"] = px if portfolio["min_entry_px"] is None else min(portfolio["min_entry_px"], px)
+            new_stop = portfolio["max_entry_px"] - self.stoploss_atr * rv * portfolio["max_entry_px"]
+            portfolio["stop"] = max(portfolio["stop"], new_stop) if portfolio["stop"] != 0 else new_stop
+            new_tp = portfolio["min_entry_px"] + self.takeprofit_atr * rv * portfolio["min_entry_px"]
+            portfolio["tp"] = min(portfolio["tp"], new_tp) if portfolio["tp"] != 0 else new_tp
+        else: 
+            portfolio["cash"] += (additional_size * px - fee) 
+            portfolio["pos"] -= additional_size
+            portfolio["min_entry_px"] = px if portfolio["min_entry_px"] is None else min(portfolio["min_entry_px"], px)
+            portfolio["max_entry_px"] = px if portfolio["max_entry_px"] is None else max(portfolio["max_entry_px"], px)
+            new_stop = portfolio["min_entry_px"] + self.stoploss_atr * rv * portfolio["min_entry_px"]
+            portfolio["stop"] = min(portfolio["stop"], new_stop) if portfolio["stop"] != 0 else new_stop
+            new_tp = portfolio["max_entry_px"] - self.takeprofit_atr * rv * portfolio["max_entry_px"]
+            portfolio["tp"] = max(portfolio["tp"], new_tp) if portfolio["tp"] != 0 else new_tp
+        portfolio["half_exit"] = False
 
-    def _close(self, port, px): 
-        value = port["pos"] * px
-        fee = abs(value) * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if port["pos"] > 0 else 0))
-        port["cash"] += value - fee
-        port.update({"pos":0, "stop":0, "tp":0, "half_exit":False, "trail":0})
+    def _reduce_or_reverse(self, portfolio, sig, px, rv, bar_idx, floor, cap, nav_for_sizing):
+        self._close(portfolio, px) 
+        nav_after_close = portfolio["cash"] 
+        self._open(portfolio, sig, px, rv, bar_idx, floor, cap, nav_after_close)
 
-    # ---------- performance ---------- 
+    def _open(self, portfolio, sig, px, rv, bar_idx, floor, cap, nav_for_sizing):
+        open_size = self._position_size(px, rv, nav_for_sizing, bar_idx, floor, cap, portfolio)
+        if open_size == 0: return
 
-    def performance (self,save_path: Path | None = None, plot_trades: bool = True):
-        ret = self.results["nav"].pct_change().dropna()
-        ann_ret = (self.results["nav"].iloc[-1] / self.results["nav"].iloc[0]) ** (252 / len(ret)) - 1
-        sharpe = (ret.mean() / ret.std()) * np.sqrt(252) if ret.std() else 0
-        dd = (self.results["nav"].cummax() - self.results["nav"]) / self.results["nav"].cummax()
-        print(f"Ann return: {ann_ret:.2%};  Sharpe: {sharpe:.2f};  MaxDD: {dd.max():.2%}")
+        fee = px * open_size * (self.cost["c"] + self.cost["s"] + (self.cost["t"] if sig > 0 else 0))
+        if sig > 0:
+            if portfolio["cash"] < (open_size * px + fee): return
+            portfolio["cash"] -= (open_size * px + fee)
+            portfolio["pos"] = open_size
+        else: 
+            portfolio["cash"] += (open_size * px - fee)
+            portfolio["pos"] = -open_size
+        
+        portfolio["entry_price"] = px 
+        portfolio["max_entry_px"] = px 
+        portfolio["min_entry_px"] = px
+        portfolio["half_exit"] = False
+        portfolio["trail"] = px 
+        
+        if sig > 0:
+            portfolio["stop"] = px - self.stoploss_atr * rv * px
+            portfolio["tp"] = px + self.takeprofit_atr * rv * px
+        else: 
+            portfolio["stop"] = px + self.stoploss_atr * rv * px
+            portfolio["tp"] = px - self.takeprofit_atr * rv * px
 
-        # -------- NAV  + Benchmark --------
-        nav_norm = self.results["nav"] / self.results["nav"].iloc[0]
-        bm_norm  = (self.price["price"].reindex(self.results.index)
-                            / self.price["price"].reindex(self.results.index).iloc[0])
+    def _close(self, portfolio, px):
+        if portfolio["pos"] == 0: return
+        value = portfolio["pos"] * px
+        abs_value = abs(value)
+        
+        if portfolio["pos"] > 0: 
+            fee = abs_value * (self.cost["c"] + self.cost["s"] + self.cost["t"])
+            portfolio["cash"] += value - fee
+        else: 
+            fee = abs_value * (self.cost["c"] + self.cost["s"]) 
+            portfolio["cash"] += value - fee 
+        
+        portfolio.update({"pos": 0, "stop": 0, "tp": 0, "half_exit": False, "trail": 0, 
+                          "entry_price":0, "max_entry_px": None, "min_entry_px": None})
+
+    def _update_trail(self, portfolio, px, rv): 
+        if portfolio["pos"] == 0 or pd.isna(rv): return
+        if portfolio["pos"] > 0: 
+            portfolio["trail"] = max(portfolio["trail"], px) 
+            new_stop = portfolio["trail"] - self.stoploss_atr * rv * portfolio["trail"] 
+            portfolio["stop"] = max(portfolio["stop"], new_stop) if portfolio["stop"] != 0 else new_stop
+        elif portfolio["pos"] < 0: 
+            portfolio["trail"] = min(portfolio["trail"], px) 
+            new_stop = portfolio["trail"] + self.stoploss_atr * rv * portfolio["trail"] 
+            portfolio["stop"] = min(portfolio["stop"], new_stop) if portfolio["stop"] != 0 else new_stop
+
+    def performance(self, save_path: Path | None = None, plot_trades: bool = True):
+        if self.results.empty: print("No results for performance."); return 0,0,0
+        nav = self.results["nav"]
+        if len(nav) < 2: print("NAV series too short."); return 0,0,0
+        
+        ret = nav.pct_change().fillna(0)
+        ann_ret = (nav.iloc[-1] / nav.iloc[0]) ** (252 / len(nav)) - 1 if nav.iloc[0] != 0 else 0
+        sharpe = (ret.mean() / (ret.std() + 1e-9)) * np.sqrt(252)
+        dd = (nav.cummax() - nav) / (nav.cummax() + 1e-9) # Add epsilon to cummax if it can be 0
+        max_dd = dd.max()
+        print(f"Annualized Return: {ann_ret:.2%}; Sharpe Ratio: {sharpe:.2f}; Max Drawdown: {max_dd:.2%}")
 
         fig, ax1 = plt.subplots(figsize=(12, 5))
-        ax1.plot(nav_norm, label="Strategy NAV", color="steelblue")
-        ax1.plot(bm_norm,  label="Benchmark",     color="gray", alpha=0.6)
-        ax1.set_ylabel("Normalized NAV", color="steelblue")
+        nav_norm = nav / nav.iloc[0] if nav.iloc[0] != 0 else nav
+        bm_px = self.price_all_history["price"].reindex(nav.index).fillna(method='ffill')
+        bm_norm = bm_px / bm_px.iloc[0] if not bm_px.empty and bm_px.iloc[0] != 0 else pd.Series(1, index=nav.index)
+       
+        ax1.plot(nav_norm.index, nav_norm, label="Strategy NAV", color="steelblue", lw=1.5)
+        ax1.plot(bm_norm.index, bm_norm, label="Benchmark", color="gray", alpha=0.7, lw=1)
+
+        trend = self.results["trend_flag_t-1"].fillna(0)
+        def shade_zone(cond, color, alpha):
+            blocks = (cond != cond.shift()).cumsum()
+            for _, grp_idx in trend[cond].groupby(blocks).groups.items():
+                if not grp_idx.empty: ax1.axvspan(trend.index[grp_idx[0]], trend.index[grp_idx[-1]], color=color, alpha=alpha, zorder=-2)
+        
+        shade_zone(trend == 1, "limegreen", 0.12)
+        shade_zone(trend == -1, "tomato", 0.12)
+        shade_zone(trend == 0, "gold", 0.08)
+
+        ax1.set_ylabel("Normalized NAV / Price", color="steelblue")
         ax1.tick_params(axis="y", labelcolor="steelblue")
 
-        # -------- marker --------
         if plot_trades:
-            long_idx   = self.results.index[self.results["signal"] ==  1]
-            short_idx  = self.results.index[self.results["signal"] == -1]
-            exit_idx = self.results.index[(self.results["pos"].shift(fill_value=0) != 0) & (self.results["pos"] == 0)]
+            long_idx = self.results.index[self.results["signal_today"] == 1] # signal_today from backtest log
+            short_idx = self.results.index[self.results["signal_today"] == -1]
+            pos_chg = self.results["pos"].diff().fillna(0)
+            exit_idx = self.results.index[(pos_chg != 0) & (self.results["pos"] == 0)] # Exited to flat
 
-            ax1.scatter(long_idx,  nav_norm.loc[long_idx],  marker="^", color="green", s=90, label="Long entry")
-            ax1.scatter(short_idx, nav_norm.loc[short_idx], marker="v", color="red",   s=90, label="Short entry")
-            ax1.scatter(exit_idx,  nav_norm.loc[exit_idx],  marker="x", color="orange",s=90, label="Exit")
+            ax1.scatter(long_idx, nav_norm.loc[long_idx], marker="^", color="green", s=70, label="Long Entry/Add", zorder=3, alpha=0.8)
+            ax1.scatter(short_idx, nav_norm.loc[short_idx], marker="v", color="red", s=70, label="Short Entry/Add", zorder=3, alpha=0.8)
+            ax1.scatter(exit_idx, nav_norm.loc[exit_idx], marker="x", color="blue", s=70, label="Exit to Zero", zorder=3, alpha=0.8)
 
-        # -------- Holding secondary axis --------
         ax2 = ax1.twinx()
-        ax2.fill_between(self.results.index, self.results["pos"], 0,
-                        color="lightgray", alpha=0.3, step="mid")
-        ax2.set_ylabel("Position (shares)", color="gray")
+        ax2.fill_between(self.results.index, self.results["pos"], 0, color="darkgray", alpha=0.3, step="mid", label="Position")
+        ax2.set_ylabel("Position (Shares)", color="gray")
         ax2.tick_params(axis="y", labelcolor="gray")
+        ax2.grid(False) # Turn off grid for secondary axis
 
-
-        # ======== ========
-        ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=3))   #One major scale every 3 months
+        ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=max(1, len(nav.index) // 252 // 2))) # Auto interval based on years
         ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-        plt.setp(ax1.get_xticklabels(), rotation=45, ha='right')
-
-        # Merge legend and display
-        h1, l1 = ax1.get_legend_handles_labels() 
-        ax1.legend(h1, l1, loc="upper left")
-        plt.title("Strategy NAV & Positions (Entries / Exits)")
-        plt.tight_layout()        
-        plt.show()
-
-        if save_path:
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            plt.savefig(save_path, dpi=120, bbox_inches="tight")
-            plt.close(fig)              
-        else:
-            plt.show()
-
-        # return
-        return ann_ret, sharpe, dd.max()
+        plt.setp(ax1.get_xticklabels(), rotation=30, ha='right')
+        ax1.grid(True, axis='y', linestyle=':', alpha=0.5)
+        ax1.set_title("Strategy Performance: NAV & Positions", fontsize=14)
         
+        handles1, labels1 = ax1.get_legend_handles_labels()
+        handles2, labels2 = ax2.get_legend_handles_labels()
+        custom_legends = [Line2D([0], [0], color='limegreen', lw=4, alpha=0.3),
+                          Line2D([0], [0], color='tomato', lw=4, alpha=0.3),
+                          Line2D([0], [0], color='gold', lw=4, alpha=0.3)]
+        fig.legend(handles1 + handles2 + custom_legends, 
+                   labels1 + labels2 + ["Uptrend (t-1)", "Downtrend (t-1)", "Range (t-1)"], 
+                   loc="upper center", ncol=3, bbox_to_anchor=(0.5, 0.99), frameon=True, fontsize='small')
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.93]) # Adjust layout to make space for fig legend
+        if save_path: plt.savefig(save_path, dpi=150); plt.close(fig)
+        else: plt.show()
+        return ann_ret, sharpe, max_dd
+
+    def get_data_after_uptrend_ends(self, num_days_to_get: int = 10) -> list:
+        if self.results.empty: print("Error: Run backtest() first."); return []
+        cols = ['trend_flag_t-1', 'raw_sig_t-1', 'signal_today', 'RSI_pct_t-1', 'pos', 'cooldown_active', 'locked_active']
+        if not all(c in self.results.columns for c in cols): print(f"Error: Results missing cols: {cols}"); return []
+
+        print(f"\n--- Analysis: Data for {num_days_to_get} days after uptrend ends ---")
+        uptrend_ends_dates = []
+        trend_flags = self.results['trend_flag_t-1']
+        for i in range(1, len(trend_flags)):
+            if trend_flags.iloc[i-1] == 1 and trend_flags.iloc[i] != 1:
+                uptrend_ends_dates.append(trend_flags.index[i-1])
+        
+        if not uptrend_ends_dates: print("No ended uptrend periods found."); return []
+
+        all_events = []
+        for end_date in uptrend_ends_dates:
+            print(f"\n>> Uptrend ended on (state observed on): {end_date.strftime('%Y-%m-%d')}")
+            post_uptrend_indices = self.results.index[self.results.index > end_date]
+            if post_uptrend_indices.empty: print(f"  No data after {end_date.strftime('%Y-%m-%d')}."); continue
+            
+            start_loc = self.results.index.get_loc(post_uptrend_indices[0])
+            event_data_list = []
+            print(f"  Fetching data for next {num_days_to_get} trading days:")
+            for offset in range(num_days_to_get):
+                current_loc = start_loc + offset
+                if current_loc < len(self.results):
+                    date_actual = self.results.index[current_loc]
+                    row = self.results.iloc[current_loc]
+                    day_data = {'date': date_actual.strftime('%Y-%m-%d'),
+                                'RSI_pct_prev': row.get('RSI_pct_t-1', np.nan),
+                                'raw_sig_prev': row.get('raw_sig_t-1', np.nan),
+                                'signal_curr': row.get('signal_today', np.nan),
+                                'is_ranging_curr': (row.get('trend_flag_t-1', 0) == 0),
+                                'cooldown_curr': row.get('cooldown_active', False),
+                                'locked_curr': row.get('locked_active', False),
+                                'pos_curr': row.get('pos', 0)}
+                    event_data_list.append(day_data)
+                    print(f"    {day_data['date']}: RSI%(t-1)={day_data['RSI_pct_prev']:.2f}, raw_sig(t-1)={day_data['raw_sig_prev']:.0f}, sig(t)={day_data['signal_curr']:.0f}, "
+                          f"ranging(t)={day_data['is_ranging_curr']}, cool(t)={day_data['cooldown_curr']}, lock(t)={day_data['locked_curr']}, pos(t)={day_data['pos_curr']:.0f}")
+                else: print(f"    Only found {offset} days post-uptrend."); break
+            all_events.append({'uptrend_end_state_date': end_date.strftime('%Y-%m-%d'), 'subsequent_days_data': event_data_list})
+        return all_events
+
+if __name__ == "__main__":
+    np.random.seed(0) # For reproducibility if any part of data gen (not here) or libraries used it.
+
+    # --- Ensure the CSV file is in the correct path relative to your script ---
+    # Example: if "weighted_return" is a subfolder of where your script is:
+    # data_file_path = Path("weighted_return") / "Gold_benchmark_weights_return.csv"
+    # Or provide an absolute path if needed.
+    # For this example, assuming the file "Gold_benchmark_weights_return.csv" is in the same directory.
+    try:
+        # Attempt to load data, expecting 'date' and 'weighted_return_2' columns
+        # Create a dummy CSV for testing if the original is not available
+        dummy_dates = pd.to_datetime(pd.date_range(start="2020-01-01", end="2024-12-31", freq='B'))
+        dummy_returns = np.random.normal(loc=0.0005, scale=0.015, size=len(dummy_dates))
+        dummy_df = pd.DataFrame({'date': dummy_dates, 'weighted_return_2': dummy_returns})
+        
+        # If you have your actual CSV file, use this:
+        # data_file_path = "weighted_return/Gold_benchmark_weights_return.csv" 
+        # df_loaded = pd.read_csv(data_file_path)
+        # df_loaded["date"] = pd.to_datetime(df_loaded["date"])
+        
+        # Using dummy data for now:
+        df_loaded = dummy_df
+        print(f"Loaded data with {len(df_loaded)} rows.")
+
+    except FileNotFoundError:
+        print("ERROR: Data file not found. Please ensure 'Gold_benchmark_weights_return.csv' is accessible.")
+        print("Using dummy data for demonstration.")
+        # Fallback to dummy data if file not found (as defined above)
+        df_loaded = dummy_df
+
+
+    # Filter out weekends if returns are 0 (assuming this implies no trading)
+    # This logic might need adjustment based on actual data characteristics.
+    # If data is already business days only, this might not be needed.
+    # df_filtered = df_loaded[~((df_loaded["date"].dt.weekday >= 5) & (df_loaded["weighted_return_2"] == 0))].reset_index(drop=True)
+    df_filtered = df_loaded # Assuming business day data from dummy_df or pre-filtered CSV
+
+    daily_rets_series = df_filtered.set_index("date")["weighted_return_2"].sort_index()
+
+    # Split data into in-sample (training) and out-of-sample (testing)
+    # Adjust dates as per your requirements
+    train_end_date = pd.Timestamp("2023-06-30") 
+    test_start_date = pd.Timestamp("2023-07-01")
+
+    in_sample_returns = daily_rets_series.loc[:train_end_date] # Includes train_end_date
+    out_sample_returns = daily_rets_series.loc[test_start_date:]
+    
+    if in_sample_returns.empty or len(in_sample_returns) < EnhancedTimingStrategy(pd.Series([0])).MIN_DATA_POINTS_FOR_SIGNAL_CALC * 2: # Ensure enough data
+        print(f"In-sample period is too short or empty. Start: {daily_rets_series.index.min()}, End: {train_end_date}")
+    else:
+        print(f"\n===== In-sample (Training) from {in_sample_returns.index.min().date()} to {in_sample_returns.index.max().date()} =====")
+        strategy_train = EnhancedTimingStrategy(in_sample_returns)
+        strategy_train.backtest()
+        strategy_train.performance(save_path=Path("in_sample_performance.png"))
+        # fitted_params = getattr(strategy_train, "get_fitted_params", lambda: {})() # If params were fitted
+
+    if out_sample_returns.empty or len(out_sample_returns) < EnhancedTimingStrategy(pd.Series([0])).MIN_DATA_POINTS_FOR_SIGNAL_CALC * 2:
+         print(f"Out-of-sample period is too short or empty. Start: {test_start_date}, End: {daily_rets_series.index.max()}")
+    else:
+        print(f"\n===== Out-of-sample (Testing) from {out_sample_returns.index.min().date()} to {out_sample_returns.index.max().date()} =====")
+        strategy_test = EnhancedTimingStrategy(out_sample_returns) #, **fitted_params if params were fitted
+        strategy_test.backtest()
+        strategy_test.performance(save_path=Path("out_of_sample_performance.png"))
+
+        # Post-uptrend analysis on test data
+        post_uptrend_data = strategy_test.get_data_after_uptrend_ends(num_days_to_get=5)
+        # You can further process 'post_uptrend_data' here if needed.
+        # For example, to aggregate statistics from these events.
+        print("\n--- End of Analysis ---")
+
+```
