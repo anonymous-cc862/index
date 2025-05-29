@@ -1,0 +1,152 @@
+all_corr = []
+for theme in ['Gold']:#in result_df1['theme'].unique():#='Gold'
+    print(f"=== Deal with {theme} ===")
+
+    # ---------- 1) 读入权重 ----------
+    #csv_path=f"benchmark_weights\{theme}_benchmark_weights.csv"
+    gold = pd.read_csv(f"benchmark_weights\{theme}_benchmark_weights.csv")
+    #gold=pd.read_csv('benchmark_weights\Gold_benchmark_weights.csv')
+    weight_data=gold.copy()#pd.read_csv(f"benchmark_weights\{theme}_benchmark_weights.csv")
+
+    r = requests.post('http://flowrider.prod.schonfeld.com:8000/api/data/mkt-data-history', json={
+            'bbg_list': gold['bbg'].drop_duplicates().tolist(),
+            'start_date': '2023-05-15',
+            'end_date': '2025-05-15'})
+    rt_1 = pd.DataFrame(r.json())
+
+    #missing stocks
+    gold_set = set(gold['bbg'])
+    rt_1_set = set(rt_1['bbg'])
+    #在gold中但不在price_1_set中
+    missing_stocks =  gold_set - rt_1_set 
+    if not missing_stocks:                        # empty set / list / Series
+        rt_all_d = rt_1.copy()                    # nothing to fetch, keep original
+        #find missing stock from another API
+    else:
+        miss_stock_list = list(missing_stocks)#.tolist()
+
+        # Add " Equity" to each item
+        miss_stock_list_equity = [item + " Equity" for item in miss_stock_list]
+
+        # Mandatory fields
+        securities = miss_stock_list_equity #['000046 CH Equity']
+        fields = ['CHG_PCT_1D']
+        start_date = 20230515
+        end_date = 20250515
+
+        # Optional fields
+        # overrides = {}
+        overrides = {
+            'EQY_FUND_CRNCY': 'USD',
+
+        }
+        # options = {}
+        options = {
+            'nonTradingDayFillOption': 'ALL_CALENDAR_DAYS',
+            'nonTradingDayFillMethod': 'PREVIOUS_VALUE'
+        }
+
+        # Make the API call using Python's requests package
+        url = 'http://flowrider.prod.schonfeld.com:8005/bdh'
+        payload = {
+            'securities': securities,
+            'fields': fields,
+            'start_date': start_date,
+            'end_date': end_date,
+            'overrides': overrides,
+            'options': options
+        }
+        response = requests.post(url, json=payload)
+        rt_miss_d=pd.DataFrame(response.json()['content'])
+
+        # Make a copy of rt_miss to avoid modifying the original
+        rt_miss_transformed = rt_miss_d.copy()
+        rt_miss_transformed['date'] = pd.to_datetime(rt_miss_transformed['date']).dt.strftime('%Y-%m-%d')
+        rt_miss_transformed['security'] = rt_miss_transformed['security'].str.replace(' Equity', '')
+        rt_miss_transformed = rt_miss_transformed.rename(columns={'security': 'bbg'})
+        rt_miss_transformed = rt_miss_transformed.rename(columns={'CHG_PCT_1D': 'px_chg_1d'})
+
+        # Divide the px_chg_1d values by 10
+        rt_miss_transformed['px_chg_1d'] = pd.to_numeric(rt_miss_transformed['px_chg_1d'], errors='coerce')
+        rt_miss_transformed['px_chg_1d'] = rt_miss_transformed['px_chg_1d'] / 100
+
+        #concat with rt_1
+        rt_all_d=pd.concat([rt_1, rt_miss_transformed], ignore_index=True)
+        rt_all_d=rt_all_d.sort_values(by=['date','bbg']).reset_index(drop=True)
+
+    # =========================================================
+
+    # ① 先得到 rt_all_d（你现有的代码保持不动）
+
+    #    包含列: date, bbg, px_chg_1d
+
+    # ……你的 rt_all_d 生成流程……
+
+    # === 截止此处，rt_all_d 已准备好 =========================
+
+    # 如果 date 不是 datetime，先转：
+
+    rt_all_d["date"] = pd.to_datetime(rt_all_d["date"])
+
+    # ① pivot 宽表 (date × 股票)
+
+    def mean_corr_5d_feature(rt_all_d: pd.DataFrame, theme: str) -> pd.DataFrame:
+
+        """
+
+        给定 rt_all_d(date, bbg, px_chg_1d)，返回
+
+        ['date','mean_corr_5d','theme']，其中 mean_corr_5d 是
+
+        过去 5 个交易日所有股票两两相关系数的均值
+
+        """
+
+        # 1) 宽表
+
+        wide = (rt_all_d.pivot(index="date", columns="bbg", values="px_chg_1d")
+                        .sort_index())
+        # 2) 先算一次 5 日 rolling 相关矩阵（table-wise）：
+        #    DataFrame.rolling(...).corr(pairwise=True) -> MultiIndex 结果
+        corr_tbl = wide.rolling(5, min_periods=3).corr(pairwise=True)
+
+        # 3) 只保留上三角，再求均值
+
+        #    corr_tbl.index  : MultiIndex (date, bbg_row)
+
+        #    corr_tbl.columns: bbg_col
+
+        corr_stack = corr_tbl.stack()                        # (date, bbg_row, bbg_col)
+        #corr_tbl.index.names = ["date", "row", "col"]
+        corr_stack.index.set_names(["date", "row", "col"], inplace=True)
+
+        # 只取 row < col (上三角)每天取一半pair
+        upper = corr_stack[corr_stack.index.get_level_values("row")
+                        < corr_stack.index.get_level_values("col")]
+
+        # 按 date 求均值
+        mean_corr_5d = (
+            upper.groupby("date")
+                .mean()
+                .rename("mean_corr_5d")
+                .reset_index()
+        )
+        mean_corr_5d["theme"] = theme
+        return mean_corr_5d
+
+    #如何使用 
+
+    #theme = "Gold"
+
+    mean_corr_5d = mean_corr_5d_feature(rt_all_d, theme)
+    all_corr.append(mean_corr_5d)
+
+# 一次性 merge，避免重复列冲突
+
+corr_all = pd.concat(all_corr, ignore_index=True)
+
+result_df1 = result_df1.merge(corr_all, on=["theme", "date"], how="left")
+
+print(result_df1[["theme", "date", "mean_corr_5d"]].head())
+
+
