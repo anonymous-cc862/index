@@ -1,3 +1,61 @@
+oryError                               Traceback (most recent call last)
+Cell In[100], line 29
+     26 #gold=pd.read_csv('benchmark_weights\Gold_benchmark_weights.csv')
+     27 weight_data=gold.copy()#pd.read_csv(f"benchmark_weights\{theme}_benchmark_weights.csv")
+---> 29 r = requests.post('http://flowrider.prod.schonfeld.com:8000/api/data/mkt-data-history', json={
+     30         'bbg_list': gold['bbg'].drop_duplicates().tolist(),
+     31         'start_date': '2023-05-15',
+     32         'end_date': '2025-05-15'})
+     33 rt_1 = pd.DataFrame(r.json())
+     35 #missing stocks
+
+File c:\Users\rxliu\.conda\envs\project1\Lib\site-packages\requests\api.py:115, in post(url, data, json, **kwargs)
+    103 def post(url, data=None, json=None, **kwargs):
+    104     r"""Sends a POST request.
+    105 
+    106     :param url: URL for the new :class:`Request` object.
+   (...)    112     :rtype: requests.Response
+    113     """
+--> 115     return request("post", url, data=data, json=json, **kwargs)
+
+File c:\Users\rxliu\.conda\envs\project1\Lib\site-packages\requests\api.py:59, in request(method, url, **kwargs)
+     55 # By using the 'with' statement we are sure the session is closed, thus we
+     56 # avoid leaving sockets open which can trigger a ResourceWarning in some
+     57 # cases, and look like a memory leak in others.
+     58 with sessions.Session() as session:
+---> 59     return session.request(method=method, url=url, **kwargs)
+
+File c:\Users\rxliu\.conda\envs\project1\Lib\site-packages\requests\sessions.py:587, in Session.request(self, method, url, params, data, headers, cookies, files, auth, timeout, allow_redirects, proxies, hooks, stream, verify, cert, json)
+    582 send_kwargs = {
+    583     "timeout": timeout,
+    584     "allow_redirects": allow_redirects,
+    585 }
+    586 send_kwargs.update(settings)
+--> 587 resp = self.send(prep, **send_kwargs)
+    589 return resp
+
+File c:\Users\rxliu\.conda\envs\project1\Lib\site-packages\requests\sessions.py:745, in Session.send(self, request, **kwargs)
+    742         pass
+    744 if not stream:
+--> 745     r.content
+    747 return r
+
+File c:\Users\rxliu\.conda\envs\project1\Lib\site-packages\requests\models.py:899, in Response.content(self)
+    897         self._content = None
+    898     else:
+--> 899         self._content = b"".join(self.iter_content(CONTENT_CHUNK_SIZE)) or b""
+    901 self._content_consumed = True
+    902 # don't need to release the connection; that's been handled by urllib3
+    903 # since we exhausted the data.
+
+MemoryError: 
+
+
+
+
+
+
+
 import pandas as pd
 import numpy as np
 
