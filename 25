@@ -1,3 +1,42 @@
+def mean_corr_5d_feature(rt_all_d: pd.DataFrame, theme: str) -> pd.DataFrame:
+    rt_all_d["date"] = pd.to_datetime(rt_all_d["date"])
+    wide = rt_all_d.pivot(index="date", columns="bbg", values="px_chg_1d").sort_index()
+
+    dates = wide.index
+    mean_corr_list = []
+
+    for end_idx in range(4, len(dates)):  # 从第5个日期开始算rolling 5日窗口
+        window_data = wide.iloc[end_idx-4:end_idx+1]
+
+        # 删除全NaN列，避免相关矩阵过大
+        window_data = window_data.dropna(axis=1, how='all')
+
+        # 计算相关矩阵（股票×股票）
+        corr_matrix = window_data.corr().values
+
+        # 提取上三角，不含对角线
+        upper_tri_ix = np.triu_indices_from(corr_matrix, k=1)
+        upper_tri_values = corr_matrix[upper_tri_ix]
+
+        # 计算当天的相关系数均值，忽略nan
+        mean_corr = np.nanmean(upper_tri_values)
+
+        mean_corr_list.append({
+            'date': dates[end_idx],
+            'mean_corr_5d': mean_corr,
+            'theme': theme
+        })
+
+    return pd.DataFrame(mean_corr_list)
+
+
+
+
+
+
+
+
+
 oryError                               Traceback (most recent call last)
 Cell In[100], line 29
      26 #gold=pd.read_csv('benchmark_weights\Gold_benchmark_weights.csv')
