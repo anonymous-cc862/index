@@ -1,3 +1,90 @@
+import pandas as pd
+import numpy as np
+
+def mean_corr_5d_feature(rt_all_d: pd.DataFrame, theme: str) -> pd.DataFrame:
+    """
+    Calculates the mean of the upper triangle of the 5-day rolling correlation matrix iteratively.
+    ['date','mean_corr_5d','theme'], where mean_corr_5d is
+    the mean of all pairwise stock correlations over the past 5 trading days.
+    """
+    # Ensure 'date' column is datetime type (already done outside in the provided script)
+    # rt_all_d["date"] = pd.to_datetime(rt_all_d["date"])
+
+    # 1) Pivot to wide format: date x stocks
+    wide = (rt_all_d.pivot(index="date", columns="bbg", values="px_chg_1d")
+                    .sort_index())
+
+    # Define rolling window parameters
+    window_size = 5
+    min_periods_val = 3
+
+    # Handle cases with insufficient stocks for correlation
+    if wide.empty or wide.shape[1] < 2:
+        all_dates = rt_all_d['date'].drop_duplicates().sort_values().reset_index(drop=True)
+        mean_corr_df = pd.DataFrame({
+            'date': all_dates,
+            'mean_corr_5d': np.nan
+        })
+        mean_corr_df['theme'] = theme
+        # Ensure 'date' is datetime, though it should be from rt_all_d
+        mean_corr_df['date'] = pd.to_datetime(mean_corr_df['date'])
+        return mean_corr_df[['date', 'mean_corr_5d', 'theme']]
+
+    dates = wide.index
+    n_stocks = wide.shape[1]
+    
+    mean_corrs_list = []
+
+    # Iterate through each date that serves as the END of a rolling window
+    for i in range(len(dates)):
+        current_date = dates[i]
+        
+        # Determine the slice for the current window
+        window_start_idx = max(0, i - window_size + 1)
+        current_window_data = wide.iloc[window_start_idx : i + 1]
+
+        if len(current_window_data) < min_periods_val:
+            # Not enough periods for this window
+            mean_corrs_list.append({'date': current_date, 'mean_corr_5d': np.nan})
+        else:
+            # Calculate correlation matrix for the current window's data
+            # current_window_data has shape (current_window_length, n_stocks)
+            corr_matrix = current_window_data.corr()  # Produces an (n_stocks x n_stocks) matrix
+
+            mean_corr_for_window = np.nan # Default if not enough valid pairs
+            if not corr_matrix.empty and corr_matrix.notna().any().any():
+                # Extract upper triangle values (excluding the diagonal, k=1)
+                # np.triu_indices gives row and column indices for the upper triangle
+                # Ensure there are at least 2 stocks for triu_indices
+                if n_stocks >= 2:
+                    upper_triangle_indices = np.triu_indices(n_stocks, k=1)
+                    triangle_values = corr_matrix.to_numpy()[upper_triangle_indices]
+                    
+                    # Filter out NaNs from the correlation pairs (e.g., if a stock had no variance)
+                    triangle_values_no_nan = triangle_values[~np.isnan(triangle_values)]
+
+                    if len(triangle_values_no_nan) > 0:
+                        mean_corr_for_window = np.mean(triangle_values_no_nan)
+            
+            mean_corrs_list.append({'date': current_date, 'mean_corr_5d': mean_corr_for_window})
+
+    # Create DataFrame from the list of results
+    mean_corr_df = pd.DataFrame(mean_corrs_list)
+    mean_corr_df["theme"] = theme
+    
+    # Ensure 'date' column is datetime
+    mean_corr_df['date'] = pd.to_datetime(mean_corr_df['date'])
+
+    return mean_corr_df[['date', 'mean_corr_5d', 'theme']]
+
+
+
+
+
+
+
+
+
 all_corr = []
 for theme in ['Gold']:#in result_df1['theme'].unique():#='Gold'
     print(f"=== Deal with {theme} ===")
