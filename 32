@@ -1,0 +1,135 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+def backtest(dataset, theme):
+    test_df = dataset
+    gold_df_test = test_df[test_df["theme"] == theme].copy()
+    gold_df = gold_df_test.sort_values('date').reset_index(drop=True)
+    gold_df["px"] = (1 + gold_df["ret"]).cumprod()
+
+    initial_capital = 1_000_000
+    nav = initial_capital
+    position = 0
+    cash = nav
+
+    records = []
+
+    for i in range(10, len(gold_df) - 1):
+        date = gold_df.loc[i, 'date']
+        price = gold_df.loc[i, 'px']
+
+        signal_hist = gold_df['pred'].iloc[i - 10:i].dropna()
+        if len(signal_hist) < 10:
+            continue
+
+        mean_signal = signal_hist.mean()
+        std_signal = signal_hist.std()
+        today_signal = gold_df.loc[i, 'pred']
+
+        # ======= 策略逻辑 =======
+        if position == 0:
+            # 无仓位：看是否开多或开空
+            if today_signal > mean_signal + 0.5 * std_signal:
+                target_position = 1
+            elif today_signal < mean_signal - 0.5 * std_signal:
+                target_position = -1
+            else:
+                target_position = 0
+        elif position > 0:
+            # 持有多头，判断是否平多
+            if today_signal < mean_signal + 0.2 * std_signal:
+                target_position = 0
+            else:
+                target_position = position
+        elif position < 0:
+            # 持有空头，判断是否平空
+            if today_signal > mean_signal - 0.2 * std_signal:
+                target_position = 0
+            else:
+                target_position = position
+
+        # === 明日（t+1）开盘调整仓位 ===
+        next_day_price = gold_df.loc[i + 1, 'px']
+        action = 'hold'
+
+        if target_position != position:
+            cash += position * next_day_price  # 平掉原有仓位
+            position = 0
+            if target_position == 1:
+                position = cash / next_day_price
+                cash = 0
+                action = 'open_long'
+            elif target_position == -1:
+                position = -cash / next_day_price
+                cash = cash * 2
+                action = 'open_short'
+            elif target_position == 0:
+                action = 'close'
+
+        nav = cash + position * next_day_price
+
+        records.append({
+            'date': gold_df.loc[i + 1, 'date'],
+            'price': next_day_price,
+            'signal': today_signal,
+            'mean_signal': mean_signal,
+            'std_signal': std_signal,
+            'position': position,
+            'cash': cash,
+            'nav': nav,
+            'action': action
+        })
+
+    bt_df = pd.DataFrame(records).set_index('date')
+    bt_df['buy_and_hold_nav'] = initial_capital * bt_df['price'] / bt_df['price'].iloc[0]
+
+    # 评估与画图
+    bt_df['return'] = bt_df['nav'].pct_change().fillna(0)
+    bt_df['cum_return'] = (1 + bt_df['return']).cumprod()
+    bt_df['nav_peak'] = bt_df['nav'].cummax()
+    bt_df['drawdown'] = bt_df['nav'] / bt_df['nav_peak'] - 1
+    max_drawdown = bt_df['drawdown'].min()
+    bt_df['bh_return'] = bt_df['buy_and_hold_nav'].pct_change().fillna(0)
+    bt_df['bh_cum_return'] = (1 + bt_df['bh_return']).cumprod()
+    bt_df['bh_nav_peak'] = bt_df['buy_and_hold_nav'].cummax()
+    bt_df['bh_drawdown'] = bt_df['buy_and_hold_nav'] / bt_df['bh_nav_peak'] - 1
+    bh_max_drawdown = bt_df['bh_drawdown'].min()
+    days = len(bt_df)
+    annualized_return = (bt_df['nav'].iloc[-1] / bt_df['nav'].iloc[0]) ** (252 / days) - 1
+    sharpe_ratio = np.sqrt(252) * bt_df['return'].mean() / bt_df['return'].std()
+    bh_annualized_return = (bt_df['buy_and_hold_nav'].iloc[-1] / bt_df['buy_and_hold_nav'].iloc[0]) ** (252 / days) - 1
+    bh_sharpe_ratio = np.sqrt(252) * bt_df['bh_return'].mean() / bt_df['bh_return'].std()
+
+    print("==== 策略表现 ====")
+    print(f"年化收益率:     {annualized_return:.2%}")
+    print(f"Sharpe比率:     {sharpe_ratio:.2f}")
+    print(f"最大回撤:       {max_drawdown:.2%}")
+    print("\n==== Buy-and-Hold 表现 ====")
+    print(f"年化收益率:     {bh_annualized_return:.2%}")
+    print(f"Sharpe比率:     {bh_sharpe_ratio:.2f}")
+    print(f"最大回撤:       {bh_max_drawdown:.2%}")
+
+    # 绘图
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(bt_df.index, bt_df['nav'], label='Strategy NAV', color='blue')
+    ax.plot(bt_df.index, bt_df['buy_and_hold_nav'], label='Buy-and-Hold NAV', color='orange', linestyle='--')
+
+    for idx, row in bt_df.iterrows():
+        if row['action'] == 'open_long':
+            ax.scatter(idx, row['nav'], marker='^', color='green', s=100, label='Long Entry')
+        elif row['action'] == 'open_short':
+            ax.scatter(idx, row['nav'], marker='v', color='red', s=100, label='Short Entry')
+        elif row['action'] == 'close':
+            ax.scatter(idx, row['nav'], marker='o', color='black', s=100, label='Exit')
+
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    ax.legend(by_label.values(), by_label.keys())
+
+    ax.set_title(f"Daily Dynamic Signal Backtest ({theme} Theme)")
+    ax.set_xlabel('Date')
+    ax.set_ylabel('NAV')
+    ax.grid(True)
+    plt.tight_layout()
+    plt.show()
