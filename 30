@@ -169,9 +169,16 @@ df_clean=df_clean.dropna()
 
 df_clean
 # ---------- 推理 & 评估 预测----------
+# ---------- 1. 划分 train / test ----------
+cutoff = pd.Timestamp("2024-08-15")
+train_df = df_clean[df_clean["date"] <= cutoff].copy()
+test_df  = df_clean[df_clean["date"] >  cutoff].copy()
+feature_cols = [
+    c for c in train_df.columns
+    if c not in ["date", "y_3d", "y_clip", "low", "high",'theme']
+]
 
 y_pred = model.predict(test_df[feature_cols], num_iteration=model.best_iteration)
-
 
 
 import pandas as pd
