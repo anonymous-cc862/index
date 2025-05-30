@@ -1,0 +1,142 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# 假设你的 result_df1 已经加载完毕且存在
+
+# ---- 【1】数据准备和模型预测（你给定的代码后续的模型预测） ----
+df_clean["pred"] = np.nan
+df_clean.loc[test_df.index, "pred"] = y_pred
+
+# 仅取Gold theme进行回测
+gold_df = df_clean[df_clean["theme"] == 'Gold'].copy()
+gold_df = gold_df.sort_values('date').reset_index(drop=True)
+
+# 从有完整历史（20天）的第一天开始
+start_idx = 20
+
+# ---- 【2】回测参数 ----
+initial_capital = 1_000_000
+nav = initial_capital
+position = 0
+cash = nav
+holding = False
+hold_start_idx = None
+hold_period = 5
+
+# 存储每日回测结果
+records = []
+
+# ---- 【3】每日循环进行回测 ----
+for i in range(start_idx, len(gold_df) - hold_period):
+
+    date = gold_df.loc[i, 'date']
+    price = gold_df.loc[i, 'px']
+
+    # 每日取过去20天信号计算均值和std
+    signal_hist = gold_df['pred'].iloc[i-20:i].dropna()
+    if len(signal_hist) < 10:
+        continue  # 数据不足则跳过
+
+    mean_signal = signal_hist.mean()
+    std_signal = signal_hist.std()
+
+    today_signal = gold_df.loc[i, 'pred']
+
+    # 判断交易信号
+    action = 'hold'
+
+    if not holding:
+        # 若无持仓，看是否开仓
+        if today_signal >= mean_signal + 1.2 * std_signal:
+            # Long 开多仓
+            position = cash / price
+            cash = 0
+            holding = True
+            hold_start_idx = i
+            action = 'long'
+        elif today_signal <= mean_signal - 1.2 * std_signal:
+            # Short 开空仓
+            position = -cash / price
+            cash = cash * 2  # 空仓后现金翻倍
+            holding = True
+            hold_start_idx = i
+            action = 'short'
+    else:
+        # 持仓满5天后检查是否平仓
+        if (i - hold_start_idx) % hold_period == 0:
+            # 重新评估信号
+            if position > 0 and today_signal <= mean_signal - 1.0 * std_signal:
+                # 平多仓
+                cash += position * price
+                position = 0
+                holding = False
+                action = 'close_long'
+            elif position < 0 and today_signal >= mean_signal + 1.0 * std_signal:
+                # 平空仓
+                cash += position * price
+                position = 0
+                holding = False
+                action = 'close_short'
+            # 否则继续持仓，下个周期再评估
+
+    nav = cash + position * price
+
+    records.append({
+        'date': date,
+        'price': price,
+        'signal': today_signal,
+        'mean_signal': mean_signal,
+        'std_signal': std_signal,
+        'position': position,
+        'cash': cash,
+        'nav': nav,
+        'action': action
+    })
+
+# 转为 DataFrame
+bt_df = pd.DataFrame(records)
+
+# ---- 【4】回测表现评估 ----
+bt_df.set_index('date', inplace=True)
+
+# 计算收益率和累计收益
+bt_df['return'] = bt_df['nav'].pct_change().fillna(0)
+bt_df['cum_return'] = (1 + bt_df['return']).cumprod() - 1
+
+# 计算年化收益和夏普比率
+total_days = (bt_df.index[-1] - bt_df.index[0]).days
+annualized_return = (bt_df['nav'][-1] / initial_capital)**(365/total_days) - 1
+sharpe_ratio = np.sqrt(252) * bt_df['return'].mean() / bt_df['return'].std()
+
+# 输出表现
+print(f"年化收益率: {annualized_return:.2%}")
+print(f"Sharpe比率: {sharpe_ratio:.2f}")
+
+# ---- 【5】绘图 ----
+fig, ax = plt.subplots(figsize=(12, 6))
+
+ax.plot(bt_df.index, bt_df['nav'], label='NAV', color='blue')
+ax.set_title('Backtest NAV Curve for Gold Theme')
+ax.set_xlabel('Date')
+ax.set_ylabel('NAV')
+ax.grid(True)
+
+# 标记交易行为
+for idx, row in bt_df.iterrows():
+    if row['action'] == 'long':
+        ax.scatter(idx, row['nav'], marker='^', color='green', s=100, label='Long Entry')
+    elif row['action'] == 'short':
+        ax.scatter(idx, row['nav'], marker='v', color='red', s=100, label='Short Entry')
+    elif row['action'] == 'close_long':
+        ax.scatter(idx, row['nav'], marker='o', color='darkgreen', s=100, label='Long Exit')
+    elif row['action'] == 'close_short':
+        ax.scatter(idx, row['nav'], marker='o', color='darkred', s=100, label='Short Exit')
+
+# 避免图例重复
+handles, labels = ax.get_legend_handles_labels()
+by_label = dict(zip(labels, handles))
+ax.legend(by_label.values(), by_label.keys())
+
+plt.tight_layout()
+plt.show()
