@@ -1,0 +1,318 @@
+import pandas as pd
+
+import numpy as np
+
+from scipy.stats import zscore
+
+import ta            # pip install ta  (比 talib 更容易装；rsi/gvol 等函数名类似)
+# ---------- 1. 
+#数据准备 ----------
+
+df = result_df1.copy()#df_clipped.copy()
+df["date"] = pd.to_datetime(df["date"])
+df = df.sort_values(["theme", "date"])
+price_source = "ret"             # ① 只有收益率就先用它累积近似价格
+
+# 用收益率重建一个"伪价格"索引，初始价取 1
+
+df["px"] = df.groupby("theme")[price_source].transform(
+    lambda r: (1 + r).cumprod()
+)
+# ---------- 2. 
+#现有特征 ------------
+grp = df.groupby("theme", group_keys=False)
+
+# 2-1 3 日累计收益 (rolling 累积)
+df["ret_3d_m"] = grp["px"].apply(lambda s: s.rolling(3).mean())
+df["px_3d_c"] = grp["px"].transform(lambda s: s / s.shift(3) - 1)#
+df["ret_3d_std"] = grp["ret"].apply(lambda s: s.rolling(3).std())
+
+# 2-3 RSI_14
+df["rsi_14"] = grp["px"].apply(lambda s: ta.momentum.rsi(s, window=14))
+
+# 2-4 成交量因子（volume / 20d均值）
+df["vol_rel_20d"] = (
+    df.groupby("theme")["volume"]
+      .transform(lambda s: s / s.rolling(window=20, min_periods=10).mean())
+)
+df["vol_20d_mean"] = (
+    df.groupby("theme")["volume"]
+      .transform(lambda s: s.rolling(window=20, min_periods=10).mean())
+)
+#衍生特征 ----------
+# 3-1 动量：5/10/20 d 累积收益
+for k in (5, 10, 20):
+    df[f"mom_{k}d"] = grp["px"].apply(lambda s: s.pct_change(k))
+
+# 3-3 成交额 rolling-zscore
+def rolling_z(series, w=20, min_p=10):
+    ma = series.rolling(w, min_periods=min_p).mean()
+    sd = series.rolling(w, min_periods=min_p).std()
+    return (series - ma) / sd
+df["turnover_z"] = df.groupby("theme")["turnover"].transform(rolling_z)
+
+w_fast, w_slow = 5, 20
+df['wma_fast'] = grp['px'].apply(lambda s: s.ewm(span=w_fast, min_periods=3, adjust=False).mean())
+df['wma_slow'] = grp['px'].apply(lambda s: s.ewm(span=w_slow, min_periods=10, adjust=False).mean())
+df['ma_spread'] = df['wma_fast'] / df['wma_slow'] - 1            # 均线差
+
+# ③ 逐 theme 做 20 日滚动皮尔逊相关
+df["ret"] = df.groupby("theme")["px"].pct_change()
+
+theme_idx_ret = (
+    df.groupby(["theme", "date"])["ret"]
+      .mean()
+      .rename("ret_idx")               # 每天每个 theme 的指数收益
+      .reset_index()
+)
+
+# ② 合回原表，得到每行两列：个股 ret、指数 ret_idx
+df = df.merge(theme_idx_ret, on=["theme", "date"], how="left")
+
+def rolling_corr(g, window=20, min_p=10):
+    return (
+        g[["ret", "ret_idx"]]
+        .rolling(window, min_periods=min_p)
+        .corr()
+        .unstack()               # ↘ 把 (ret, ret_idx) 两行转列
+        .iloc[:, 1]              # 取 ret 与 ret_idx 的相关
+    )
+
+df["corr_20d"] = (
+    df.sort_values("date")       # rolling 需要先按日期排序
+      .groupby("theme", group_keys=False)
+      .apply(rolling_corr)
+)
+
+
+ret_mkt = (           # 每天跨 theme 等权平均
+    df.groupby("date")["ret"]
+      .mean()
+      .rename("ret_mkt")          # 当天市场指数收益
+      .reset_index()
+)
+
+# 合回原表
+
+df = df.merge(ret_mkt, on="date", how="left")
+grp = df.groupby("theme", group_keys=False)   # ← 重新建！
+# -------------------------------------------------------------
+# ⑤ 相对收益：theme 指数 vs. 全市场
+#     形式1：差值      -> ret_idx - ret_mkt
+#     形式2：超额比率  -> (1+ret_idx)/(1+ret_mkt) - 1
+# -------------------------------------------------------------
+#f["rel_ret_idx"]  = df["ret_idx"] - df["ret_mkt"]               # 常用
+df["rel_ret_ratio"] = (1 + df["ret_idx"]) / (1 + df["ret_mkt"]) - 1  # 若想要比率
+
+# 布林带宽： (上轨-下轨)/中轨
+def bollinger_bandwidth(s, n=20,min_p=10, k=2):
+    mid = s.rolling(n, min_periods=min_p).mean()
+    std = s.rolling(n, min_periods=min_p).std()
+    upper, lower = mid + k*std, mid - k*std
+    return (upper - lower) / mid
+df['bb_width_20d'] = grp['px'].apply(bollinger_bandwidth)
+
+df['ret_skew_20d'] = grp['ret'].apply(lambda s: s.rolling(20, min_periods=10).skew())
+
+df['ret_kurt_20d'] = grp['ret'].apply(lambda s: s.rolling(20, min_periods=10).kurt())
+
+def rolling_beta_alpha(sub, w=30, min_p=10):
+
+    x = sub['ret_mkt']
+
+    y = sub['ret']
+
+    beta  = y.rolling(w, min_periods=min_p).cov(x) / x.rolling(w, min_periods=min_p).var()
+
+    alpha = y.rolling(w, min_periods=min_p).mean() - beta * x.rolling(w, min_periods=min_p).mean()
+
+    return pd.DataFrame({'beta_30d': beta, 'alpha_30d': alpha})
+
+df[['beta_30d', 'alpha_30d']] = grp.apply(rolling_beta_alpha)   # 不再 droplevel
+
+
+hi52 = grp['px'].apply(lambda s: s.rolling(60, min_periods=10).max())
+lo52 = grp['px'].apply(lambda s: s.rolling(60, min_periods=10).min())
+df['pct_to_hi52'] = (df['px'] - hi52) / hi52
+df['pct_to_lo52'] = (df['px'] - lo52) / lo52
+
+df['px_chg1d']  = grp['px'].pct_change()
+df['vol_chg1d'] = grp['volume'].pct_change()
+df['up_px_up_vol'] = ((df['px_chg1d'] > 0) & (df['vol_chg1d'] > 0)).astype(int)
+# OBV（On-Balance Volume）
+df['obv'] = grp.apply(lambda g: (np.sign(g['px_chg1d']) * g['volume']).cumsum()).values
+df['obv_z20'] = grp['obv'].apply(lambda s: (s - s.rolling(20,min_periods=10).mean()) / s.rolling(20,min_periods=10).std())
+
+# # ---------- 8.时间/日历效应 ------------------------------
+
+df['dow'] = df['date'].dt.dayofweek          # 周几 [0,4]
+for d in range(5):
+    df[f'dow_{d}'] = (df['dow'] == d).astype(int)
+df['eom'] = (df['date'] + pd.tseries.offsets.BMonthEnd(0) ==
+             df['date']).astype(int)         # 月末 dummy
+# ---------- 4. 
+#收尾 ----------
+df["y_3d"] = (
+    df.groupby("theme")["px"]
+      .apply(lambda s: s.shift(-3) / s - 1)    # shift(-5) 表示向前看 5 天
+)
+
+df['date']=pd.to_datetime(df['date'])
+df_clean=df[['date','theme', 'ret', 'volume', 'turnover', 'crowd', 'crowd_c', 'mom_1m', 'mean_corr_5d', "corr_20d","px_3d_c",
+        'ret_3d_m', 'ret_3d_std', 'rsi_14', 'vol_rel_20d',
+       'mom_5d', 'mom_10d', 'mom_20d', 'turnover_z', 'wma_fast','wma_slow', 'ma_spread',
+       'bb_width_20d','ret_skew_20d','ret_kurt_20d','beta_30d', 'alpha_30d',
+       'pct_to_hi52', 'pct_to_lo52','px_chg1d', 'vol_chg1d', 'up_px_up_vol', 'obv', 'obv_z20', 'dow','dow_0', 'dow_1', 'dow_2', 'dow_3', 'dow_4', 'eom',
+       'y_3d']]
+
+df_clean=df_clean.dropna()
+
+df_clean
+# ---------- 推理 & 评估 预测----------
+
+y_pred = model.predict(test_df[feature_cols], num_iteration=model.best_iteration)
+
+
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# 假设你的 result_df1, df_clean, test_df, y_pred 已经存在
+
+# 仅取Gold theme进行回测
+gold_df_test = test_df[test_df["theme"] == 'Grand_AI'].copy()
+gold_df =gold_df_test.sort_values('date').reset_index(drop=True)
+gold_df["px"] = (1 + gold_df["ret"]).cumprod()
+
+
+# 回测初始参数
+initial_capital = 1_000_000
+nav = initial_capital
+position = 0
+cash = nav
+holding = False
+
+records = []
+
+# 从第20天开始，每日循环决策
+for i in range(10, len(gold_df)-1):
+
+    date = gold_df.loc[i, 'date']
+    price = gold_df.loc[i, 'px']
+
+    # 过去20天的信号历史
+    signal_hist = gold_df['pred'].iloc[i-10:i].dropna()
+    if len(signal_hist) < 10:
+        continue
+
+    mean_signal = signal_hist.mean()
+    std_signal = signal_hist.std()
+    today_signal = gold_df.loc[i, 'pred']
+
+    # 根据信号判断明日仓位（t+1开盘执行）
+    if today_signal >= mean_signal + 1 * std_signal:
+        target_position = 1  # Long
+    elif today_signal <= mean_signal - 1 * std_signal:
+        target_position = -1  # Short
+    elif mean_signal - 1 * std_signal <= today_signal <= mean_signal + 1 * std_signal:
+        target_position = 0   # Close
+    else:
+        target_position = position  # Hold (不变)
+
+    # 明日开盘执行调整仓位
+    next_day_price = gold_df.loc[i+1, 'px']
+    action = 'hold'
+
+    if target_position != position:
+        # 需要调整仓位
+        cash += position * next_day_price  # 先平掉原仓位
+        position = 0
+
+        if target_position == 1:
+            position = cash / next_day_price
+            cash = 0
+            action = 'open_long'
+        elif target_position == -1:
+            position = -cash / next_day_price
+            cash = cash * 2
+            action = 'open_short'
+        elif target_position == 0:
+            action = 'close'
+
+    nav = cash + position * next_day_price
+
+    records.append({
+        'date': gold_df.loc[i+1, 'date'],
+        'price': next_day_price,
+        'signal': today_signal,
+        'mean_signal': mean_signal,
+        'std_signal': std_signal,
+        'position': position,
+        'cash': cash,
+        'nav': nav,
+        'action': action
+    })
+
+bt_df = pd.DataFrame(records).set_index('date')
+
+# buy-and-hold 基准
+bt_df['buy_and_hold_nav'] = initial_capital * bt_df['price'] / bt_df['price'].iloc[0]
+
+# 评估表现
+# === 评估表现 ===
+bt_df['return'] = bt_df['nav'].pct_change().fillna(0)
+bt_df['cum_return'] = (1 + bt_df['return']).cumprod()
+bt_df['nav_peak'] = bt_df['nav'].cummax()
+bt_df['drawdown'] = bt_df['nav'] / bt_df['nav_peak'] - 1
+max_drawdown = bt_df['drawdown'].min()
+
+# Buy-and-Hold评估
+bt_df['bh_return'] = bt_df['buy_and_hold_nav'].pct_change().fillna(0)
+bt_df['bh_cum_return'] = (1 + bt_df['bh_return']).cumprod()
+bt_df['bh_nav_peak'] = bt_df['buy_and_hold_nav'].cummax()
+bt_df['bh_drawdown'] = bt_df['buy_and_hold_nav'] / bt_df['bh_nav_peak'] - 1
+bh_max_drawdown = bt_df['bh_drawdown'].min()
+
+# 年化收益率 & Sharpe
+days = len(bt_df)
+annualized_return = (bt_df['nav'].iloc[-1] / bt_df['nav'].iloc[0]) ** (252 / days) - 1
+sharpe_ratio = np.sqrt(252) * bt_df['return'].mean() / bt_df['return'].std()
+
+bh_annualized_return = (bt_df['buy_and_hold_nav'].iloc[-1] / bt_df['buy_and_hold_nav'].iloc[0]) ** (252 / days) - 1
+bh_sharpe_ratio = np.sqrt(252) * bt_df['bh_return'].mean() / bt_df['bh_return'].std()
+
+# 输出表现
+print("==== 策略表现 ====")
+print(f"年化收益率:     {annualized_return:.2%}")
+print(f"Sharpe比率:     {sharpe_ratio:.2f}")
+print(f"最大回撤:       {max_drawdown:.2%}")
+
+print("\n==== Buy-and-Hold 表现 ====")
+print(f"年化收益率:     {bh_annualized_return:.2%}")
+print(f"Sharpe比率:     {bh_sharpe_ratio:.2f}")
+print(f"最大回撤:       {bh_max_drawdown:.2%}")
+
+# === 绘图 ===
+fig, ax = plt.subplots(figsize=(12, 6))
+ax.plot(bt_df.index, bt_df['nav'], label='Strategy NAV', color='blue')
+ax.plot(bt_df.index, bt_df['buy_and_hold_nav'], label='Buy-and-Hold NAV', color='orange', linestyle='--')
+
+for idx, row in bt_df.iterrows():
+    if row['action'] == 'open_long':
+        ax.scatter(idx, row['nav'], marker='^', color='green', s=100, label='Long Entry')
+    elif row['action'] == 'open_short':
+        ax.scatter(idx, row['nav'], marker='v', color='red', s=100, label='Short Entry')
+    elif row['action'] == 'close':
+        ax.scatter(idx, row['nav'], marker='o', color='black', s=100, label='Exit')
+
+handles, labels = ax.get_legend_handles_labels()
+by_label = dict(zip(labels, handles))
+ax.legend(by_label.values(), by_label.keys())
+
+ax.set_title('Daily Dynamic Signal Backtest (Grand_AI Theme)')
+ax.set_xlabel('Date')
+ax.set_ylabel('NAV')
+ax.grid(True)
+plt.tight_layout()
+plt.show()
