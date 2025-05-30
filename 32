@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-def backtest(dataset, theme):
+def backtest(dataset, theme, compare_window=10, long_entry=0.5, short_entry=-0.5, long_exit=0.2, short_exit=0.2):
     test_df = dataset
     gold_df_test = test_df[test_df["theme"] == theme].copy()
     gold_df = gold_df_test.sort_values('date').reset_index(drop=True)
@@ -15,12 +15,12 @@ def backtest(dataset, theme):
 
     records = []
 
-    for i in range(10, len(gold_df) - 1):
+    for i in range(compare_window, len(gold_df) - 1):
         date = gold_df.loc[i, 'date']
         price = gold_df.loc[i, 'px']
 
-        signal_hist = gold_df['pred'].iloc[i - 10:i].dropna()
-        if len(signal_hist) < 10:
+        signal_hist = gold_df['pred'].iloc[i - compare_window:i].dropna()
+        if len(signal_hist) < compare_window:
             continue
 
         mean_signal = signal_hist.mean()
@@ -30,21 +30,21 @@ def backtest(dataset, theme):
         # ======= 策略逻辑 =======
         if position == 0:
             # 无仓位：看是否开多或开空
-            if today_signal > mean_signal + 0.5 * std_signal:
+            if today_signal > mean_signal + long_entry * std_signal: #long_entry=0.5
                 target_position = 1
-            elif today_signal < mean_signal - 0.5 * std_signal:
+            elif today_signal < mean_signal + short_entry * std_signal: #short_entry=-0.5
                 target_position = -1
             else:
                 target_position = 0
         elif position > 0:
             # 持有多头，判断是否平多
-            if today_signal < mean_signal + 0.2 * std_signal:
+            if today_signal < mean_signal + long_exit * std_signal: #long_exit=0.2
                 target_position = 0
             else:
                 target_position = position
         elif position < 0:
             # 持有空头，判断是否平空
-            if today_signal > mean_signal - 0.2 * std_signal:
+            if today_signal > mean_signal + short_exit * std_signal: #short_exit=0.2
                 target_position = 0
             else:
                 target_position = position
