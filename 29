@@ -1,0 +1,119 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# 假设你的 result_df1, df_clean, test_df, y_pred 已经存在
+
+df_clean["pred"] = np.nan
+df_clean.loc[test_df.index, "pred"] = y_pred
+
+gold_df = df_clean[df_clean["theme"] == 'Gold'].copy()
+gold_df = gold_df.sort_values('date').reset_index(drop=True)
+
+# 回测初始参数
+initial_capital = 1_000_000
+nav = initial_capital
+position = 0
+cash = nav
+holding = False
+
+records = []
+
+# 从第20天开始，每日循环决策
+for i in range(20, len(gold_df)-1):
+
+    date = gold_df.loc[i, 'date']
+    price = gold_df.loc[i, 'px']
+
+    # 过去20天的信号历史
+    signal_hist = gold_df['pred'].iloc[i-20:i].dropna()
+    if len(signal_hist) < 10:
+        continue
+
+    mean_signal = signal_hist.mean()
+    std_signal = signal_hist.std()
+    today_signal = gold_df.loc[i, 'pred']
+
+    # 根据信号判断明日仓位（t+1开盘执行）
+    if today_signal >= mean_signal + 1.2 * std_signal:
+        target_position = 1  # Long
+    elif today_signal <= mean_signal - 1.2 * std_signal:
+        target_position = -1  # Short
+    elif mean_signal - 1.0 * std_signal <= today_signal <= mean_signal + 1.0 * std_signal:
+        target_position = 0   # Close
+    else:
+        target_position = position  # Hold (不变)
+
+    # 明日开盘执行调整仓位
+    next_day_price = gold_df.loc[i+1, 'px']
+    action = 'hold'
+
+    if target_position != position:
+        # 需要调整仓位
+        cash += position * next_day_price  # 先平掉原仓位
+        position = 0
+
+        if target_position == 1:
+            position = cash / next_day_price
+            cash = 0
+            action = 'open_long'
+        elif target_position == -1:
+            position = -cash / next_day_price
+            cash = cash * 2
+            action = 'open_short'
+        elif target_position == 0:
+            action = 'close'
+
+    nav = cash + position * next_day_price
+
+    records.append({
+        'date': gold_df.loc[i+1, 'date'],
+        'price': next_day_price,
+        'signal': today_signal,
+        'mean_signal': mean_signal,
+        'std_signal': std_signal,
+        'position': position,
+        'cash': cash,
+        'nav': nav,
+        'action': action
+    })
+
+bt_df = pd.DataFrame(records).set_index('date')
+
+# buy-and-hold 基准
+bt_df['buy_and_hold_nav'] = initial_capital * bt_df['price'] / bt_df['price'].iloc[0]
+
+# 评估表现
+bt_df['return'] = bt_df['nav'].pct_change().fillna(0)
+annualized_return = (bt_df['nav'].iloc[-1] / initial_capital) ** (252/len(bt_df)) - 1
+sharpe_ratio = np.sqrt(252) * bt_df['return'].mean() / bt_df['return'].std()
+
+print(f"年化收益率: {annualized_return:.2%}")
+print(f"Sharpe比率: {sharpe_ratio:.2f}")
+
+# 绘图
+fig, ax = plt.subplots(figsize=(12, 6))
+
+ax.plot(bt_df.index, bt_df['nav'], label='Strategy NAV', color='blue')
+ax.plot(bt_df.index, bt_df['buy_and_hold_nav'], label='Buy-and-Hold NAV', color='orange', linestyle='--')
+
+# 标记交易行为
+for idx, row in bt_df.iterrows():
+    if row['action'] == 'open_long':
+        ax.scatter(idx, row['nav'], marker='^', color='green', s=100, label='Long Entry')
+    elif row['action'] == 'open_short':
+        ax.scatter(idx, row['nav'], marker='v', color='red', s=100, label='Short Entry')
+    elif row['action'] == 'close':
+        ax.scatter(idx, row['nav'], marker='o', color='black', s=100, label='Exit')
+
+handles, labels = ax.get_legend_handles_labels()
+by_label = dict(zip(labels, handles))
+ax.legend(by_label.values(), by_label.keys())
+
+ax.set_title('Daily Dynamic Signal Backtest (Gold Theme)')
+ax.set_xlabel('Date')
+ax.set_ylabel('NAV')
+ax.grid(True)
+
+plt.tight_layout()
+plt.show()
