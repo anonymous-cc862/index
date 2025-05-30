@@ -1,3 +1,63 @@
+# === 评估表现 ===
+bt_df['return'] = bt_df['nav'].pct_change().fillna(0)
+bt_df['cum_return'] = (1 + bt_df['return']).cumprod()
+bt_df['nav_peak'] = bt_df['nav'].cummax()
+bt_df['drawdown'] = bt_df['nav'] / bt_df['nav_peak'] - 1
+max_drawdown = bt_df['drawdown'].min()
+
+# Buy-and-Hold评估
+bt_df['bh_return'] = bt_df['buy_and_hold_nav'].pct_change().fillna(0)
+bt_df['bh_cum_return'] = (1 + bt_df['bh_return']).cumprod()
+bt_df['bh_nav_peak'] = bt_df['buy_and_hold_nav'].cummax()
+bt_df['bh_drawdown'] = bt_df['buy_and_hold_nav'] / bt_df['bh_nav_peak'] - 1
+bh_max_drawdown = bt_df['bh_drawdown'].min()
+
+# 年化收益率 & Sharpe
+days = len(bt_df)
+annualized_return = (bt_df['nav'].iloc[-1] / bt_df['nav'].iloc[0]) ** (252 / days) - 1
+sharpe_ratio = np.sqrt(252) * bt_df['return'].mean() / bt_df['return'].std()
+
+bh_annualized_return = (bt_df['buy_and_hold_nav'].iloc[-1] / bt_df['buy_and_hold_nav'].iloc[0]) ** (252 / days) - 1
+bh_sharpe_ratio = np.sqrt(252) * bt_df['bh_return'].mean() / bt_df['bh_return'].std()
+
+# 输出表现
+print("==== 策略表现 ====")
+print(f"年化收益率:     {annualized_return:.2%}")
+print(f"Sharpe比率:     {sharpe_ratio:.2f}")
+print(f"最大回撤:       {max_drawdown:.2%}")
+
+print("\n==== Buy-and-Hold 表现 ====")
+print(f"年化收益率:     {bh_annualized_return:.2%}")
+print(f"Sharpe比率:     {bh_sharpe_ratio:.2f}")
+print(f"最大回撤:       {bh_max_drawdown:.2%}")
+
+# === 绘图 ===
+fig, ax = plt.subplots(figsize=(12, 6))
+ax.plot(bt_df.index, bt_df['nav'], label='Strategy NAV', color='blue')
+ax.plot(bt_df.index, bt_df['buy_and_hold_nav'], label='Buy-and-Hold NAV', color='orange', linestyle='--')
+
+for idx, row in bt_df.iterrows():
+    if row['action'] == 'open_long':
+        ax.scatter(idx, row['nav'], marker='^', color='green', s=100, label='Long Entry')
+    elif row['action'] == 'open_short':
+        ax.scatter(idx, row['nav'], marker='v', color='red', s=100, label='Short Entry')
+    elif row['action'] == 'close':
+        ax.scatter(idx, row['nav'], marker='o', color='black', s=100, label='Exit')
+
+handles, labels = ax.get_legend_handles_labels()
+by_label = dict(zip(labels, handles))
+ax.legend(by_label.values(), by_label.keys())
+
+ax.set_title('Daily Dynamic Signal Backtest (Grand_AI Theme)')
+ax.set_xlabel('Date')
+ax.set_ylabel('NAV')
+ax.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
