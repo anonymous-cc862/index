@@ -1,3 +1,44 @@
+# ---- 【5】绘图 (增加 buy-and-hold 基准线) ----
+fig, ax = plt.subplots(figsize=(12, 6))
+
+# 绘制策略的NAV曲线
+ax.plot(bt_df.index, bt_df['nav'], label='Strategy NAV', color='blue')
+
+# 计算 buy-and-hold 基准NAV
+start_price = bt_df['price'].iloc[0]
+bt_df['buy_and_hold_nav'] = initial_capital * bt_df['price'] / start_price
+ax.plot(bt_df.index, bt_df['buy_and_hold_nav'], label='Buy-and-Hold NAV', color='orange', linestyle='--')
+
+ax.set_title('Backtest NAV Curve for Gold Theme (Strategy vs. Buy-and-Hold)')
+ax.set_xlabel('Date')
+ax.set_ylabel('NAV')
+ax.grid(True)
+
+# 标记交易行为
+for idx, row in bt_df.iterrows():
+    if row['action'] == 'long':
+        ax.scatter(idx, row['nav'], marker='^', color='green', s=100, label='Long Entry')
+    elif row['action'] == 'short':
+        ax.scatter(idx, row['nav'], marker='v', color='red', s=100, label='Short Entry')
+    elif row['action'] == 'close_long':
+        ax.scatter(idx, row['nav'], marker='o', color='darkgreen', s=100, label='Long Exit')
+    elif row['action'] == 'close_short':
+        ax.scatter(idx, row['nav'], marker='o', color='darkred', s=100, label='Short Exit')
+
+# 避免图例重复
+handles, labels = ax.get_legend_handles_labels()
+by_label = dict(zip(labels, handles))
+ax.legend(by_label.values(), by_label.keys())
+
+plt.tight_layout()
+plt.show()
+
+
+
+
+
+
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
