@@ -4,11 +4,11 @@ import matplotlib.pyplot as plt
 
 # 假设你的 result_df1, df_clean, test_df, y_pred 已经存在
 
-df_clean["pred"] = np.nan
-df_clean.loc[test_df.index, "pred"] = y_pred
+# 仅取Gold theme进行回测
+gold_df_test = test_df[test_df["theme"] == 'Grand_AI'].copy()
+gold_df =gold_df_test.sort_values('date').reset_index(drop=True)
+gold_df["px"] = (1 + gold_df["ret"]).cumprod()
 
-gold_df = df_clean[df_clean["theme"] == 'Gold'].copy()
-gold_df = gold_df.sort_values('date').reset_index(drop=True)
 
 # 回测初始参数
 initial_capital = 1_000_000
@@ -35,11 +35,11 @@ for i in range(20, len(gold_df)-1):
     today_signal = gold_df.loc[i, 'pred']
 
     # 根据信号判断明日仓位（t+1开盘执行）
-    if today_signal >= mean_signal + 1.2 * std_signal:
+    if today_signal >= mean_signal + 1 * std_signal:
         target_position = 1  # Long
-    elif today_signal <= mean_signal - 1.2 * std_signal:
+    elif today_signal <= mean_signal - 1 * std_signal:
         target_position = -1  # Short
-    elif mean_signal - 1.0 * std_signal <= today_signal <= mean_signal + 1.0 * std_signal:
+    elif mean_signal - 1 * std_signal <= today_signal <= mean_signal + 1 * std_signal:
         target_position = 0   # Close
     else:
         target_position = position  # Hold (不变)
