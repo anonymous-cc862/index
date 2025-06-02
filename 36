@@ -1,34 +1,36 @@
-非常好，你的策略已经支持开仓、平仓和动态仓位，下面是在此基础上**加入 take profit 和 cut loss（止盈/止损）**的版本，并**在图中标记出止盈和止损**。
-
----
-
-### **一、止盈/止损逻辑**
-
-1. **定义止盈/止损参数**（可自己调）：
-
-   * take\_profit = 8%（如盈利大于8%就平仓）
-   * cut\_loss = -4%（如亏损大于4%就平仓）
-
-2. **每次开仓时记录建仓成本（建仓时的price）**，用于后续止盈/止损判断。
-
-3. **持仓时，若收益率达到止盈或止损线就平仓，记录 action 为 'take\_profit' 或 'cut\_loss'**。
-
----
-
-### **二、关键修改**
+当然，下面是**带止盈（Take Profit）、止损（Cut Loss）**、且在图上高亮所有关键信号点（开仓、平仓、止盈、止损）的完整回测代码，可直接运行：
 
 ```python
-# 新增止盈止损参数
-take_profit = 0.08   # 止盈线（8%）
-cut_loss = -0.04     # 止损线（-4%）
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
-entry_price = None   # 持仓时的建仓价格
+# 假设 gold_df_test 已经筛选出来，且有 'date', 'ret', 'pred' 列
+gold_df = gold_df_test.sort_values('date').reset_index(drop=True)
+gold_df["px"] = (1 + gold_df["ret"]).cumprod()
+
+# 回测初始参数
+initial_capital = 1_000_000
+nav = initial_capital
+position = 0.0      # 仓位（持有的份额，可正可负）
+cash = nav
+holding = 0         # 1=long, -1=short, 0=空仓
+window = 20
+
+# 止盈/止损参数（可调）
+take_profit = 0.08  # 止盈线（8%）
+cut_loss = -0.04    # 止损线（-4%）
+
+entry_price = None  # 记录建仓时的价格
+
+records = []
 
 for i in range(window, len(gold_df)-1):
 
     date = gold_df.loc[i, 'date']
     price = gold_df.loc[i, 'px']
 
+    # 过去20天信号
     signal_hist = gold_df['pred'].iloc[i-window:i].dropna()
     if len(signal_hist) < window:
         continue
@@ -38,12 +40,12 @@ for i in range(window, len(gold_df)-1):
     today_signal = gold_df.loc[i, 'pred']
 
     signal_z = (today_signal - mean_signal) / (std_signal + 1e-8)
-    scale = 1
+    scale = 1  # 可调
 
     action = 'hold'
     position_new = position
 
-    # === 判断是否开仓/平仓 ===
+    # === 判断是否开仓/平仓/止盈/止损 ===
     if holding == 0:
         if today_signal >= mean_signal + 1 * std_signal:
             pos_ratio = np.tanh(scale * signal_z)
@@ -52,7 +54,6 @@ for i in range(window, len(gold_df)-1):
             holding = 1
             action = 'open_long'
             entry_price = price
-            print(action, pos_ratio)
         elif today_signal <= mean_signal - 1 * std_signal:
             pos_ratio = np.tanh(scale * signal_z)
             position_new = (cash / price) * pos_ratio
@@ -60,19 +61,32 @@ for i in range(window, len(gold_df)-1):
             holding = -1
             action = 'open_short'
             entry_price = price
-            print(action, pos_ratio)
 
     elif holding > 0:  # 持有多仓
-        # 当前收益率
         pnl = (price - entry_price) / entry_price if entry_price else 0
-        # 信号反转、止盈、止损均可平仓
-        if today_signal <= mean_signal - 0.8 * std_signal:
+        # 优先级：止盈/止损 > 信号反转
+        if pnl >= take_profit:
+            cash = cash + position * price
+            position_new = 0.0
+            holding = 0
+            action = 'take_profit'
+            entry_price = None
+        elif pnl <= cut_loss:
+            cash = cash + position * price
+            position_new = 0.0
+            holding = 0
+            action = 'cut_loss'
+            entry_price = None
+        elif today_signal <= mean_signal - 0.8 * std_signal:
             cash = cash + position * price
             position_new = 0.0
             holding = 0
             action = 'close_long'
             entry_price = None
-        elif pnl >= take_profit:
+
+    elif holding < 0:  # 持有空仓
+        pnl = (entry_price - price) / entry_price if entry_price else 0
+        if pnl >= take_profit:
             cash = cash + position * price
             position_new = 0.0
             holding = 0
@@ -84,26 +98,11 @@ for i in range(window, len(gold_df)-1):
             holding = 0
             action = 'cut_loss'
             entry_price = None
-
-    elif holding < 0:  # 持有空仓
-        pnl = (entry_price - price) / entry_price if entry_price else 0
-        if today_signal >= mean_signal + 0.8 * std_signal:
+        elif today_signal >= mean_signal + 0.8 * std_signal:
             cash = cash + position * price
             position_new = 0.0
             holding = 0
             action = 'close_short'
-            entry_price = None
-        elif pnl >= take_profit:
-            cash = cash + position * price
-            position_new = 0.0
-            holding = 0
-            action = 'take_profit'
-            entry_price = None
-        elif pnl <= cut_loss:
-            cash = cash + position * price
-            position_new = 0.0
-            holding = 0
-            action = 'cut_loss'
             entry_price = None
 
     # 明日开盘计算NAV
@@ -124,13 +123,45 @@ for i in range(window, len(gold_df)-1):
     })
 
     position = position_new
-```
 
----
+# 生成回测结果 DataFrame
+bt_df = pd.DataFrame(records).set_index('date')
 
-### **三、图表标记止盈止损点**
+# buy-and-hold 基准
+bt_df['buy_and_hold_nav'] = initial_capital * bt_df['price'] / bt_df['price'].iloc[0]
 
-```python
+# === 评估表现 ===
+bt_df['return'] = bt_df['nav'].pct_change().fillna(0)
+bt_df['cum_return'] = (1 + bt_df['return']).cumprod()
+bt_df['nav_peak'] = bt_df['nav'].cummax()
+bt_df['drawdown'] = bt_df['nav'] / bt_df['nav_peak'] - 1
+max_drawdown = bt_df['drawdown'].min()
+
+bt_df['bh_return'] = bt_df['buy_and_hold_nav'].pct_change().fillna(0)
+bt_df['bh_cum_return'] = (1 + bt_df['bh_return']).cumprod()
+bt_df['bh_nav_peak'] = bt_df['buy_and_hold_nav'].cummax()
+bt_df['bh_drawdown'] = bt_df['buy_and_hold_nav'] / bt_df['bh_nav_peak'] - 1
+bh_max_drawdown = bt_df['bh_drawdown'].min()
+
+days = len(bt_df)
+annualized_return = (bt_df['nav'].iloc[-1] / bt_df['nav'].iloc[0]) ** (252 / days) - 1
+sharpe_ratio = np.sqrt(252) * bt_df['return'].mean() / bt_df['return'].std()
+
+bh_annualized_return = (bt_df['buy_and_hold_nav'].iloc[-1] / bt_df['buy_and_hold_nav'].iloc[0]) ** (252 / days) - 1
+bh_sharpe_ratio = np.sqrt(252) * bt_df['bh_return'].mean() / bt_df['bh_return'].std()
+
+# 输出表现
+print("==== 策略表现 ====")
+print(f"年化收益率:     {annualized_return:.2%}")
+print(f"Sharpe比率:     {sharpe_ratio:.2f}")
+print(f"最大回撤:       {max_drawdown:.2%}")
+
+print("\n==== Buy-and-Hold 表现 ====")
+print(f"年化收益率:     {bh_annualized_return:.2%}")
+print(f"Sharpe比率:     {bh_sharpe_ratio:.2f}")
+print(f"最大回撤:       {bh_max_drawdown:.2%}")
+
+# === 绘图 ===
 fig, ax = plt.subplots(figsize=(12, 6))
 ax.plot(bt_df.index, bt_df['nav'], label='Strategy NAV', color='blue')
 ax.plot(bt_df.index, bt_df['buy_and_hold_nav'], label='Buy-and-Hold NAV', color='orange', linestyle='--')
@@ -162,12 +193,11 @@ plt.show()
 
 ---
 
-## **四、全流程建议**
+**说明：**
 
-1. **止盈止损逻辑优先于信号反转**（可以按自己喜好调换顺序）
-2. 止盈/止损会用不同颜色/形状在净值曲线中标记
-3. 你可以调节 `take_profit`/`cut_loss` 参数进行风控优化
+* 止盈/止损、信号反转都能触发平仓，action 字段会高亮记录。
+* 图中：绿色^为多头开仓，红色v为空头开仓，金色P为止盈，紫色X为止损，黑色o为信号反转平仓。
+* 止盈/止损优先于信号反转（如有不同需求可微调顺序）。
+* 你只需要准备好`gold_df_test`即可直接运行。
 
----
-
-如需完整文件版或有细节想法随时补充！
+如需调参、画额外指标、分析分布等，都可再补充！
