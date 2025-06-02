@@ -1,104 +1,162 @@
-你的策略年化收益率只有 4.84%，Sharpe 仅 0.30，最大回撤接近 18%，而**Buy-and-Hold**的年化收益率高达 38%，Sharpe 1.14，这说明模型择时没有创造超额收益，反而长期跑输大盘。这种表现差的原因有如下可能（以及具体建议）：
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
----
+# 假设你的 result_df1, df_clean, test_df, y_pred 已经存在
 
-## 1. **信号本身无有效性**
+# 仅取Gold theme进行回测
+gold_df_test = test_df[test_df["theme"] == 'Gold'].copy()
+gold_df =gold_df_test.sort_values('date').reset_index(drop=True)
+gold_df["px"] = (1 + gold_df["ret"]).cumprod()
 
-* 你的 `pred` 信号对未来走势没有**足够的信息优势**，可能模型的预测准确率并不比随机强多少。
-* 模型是**out-of-sample**的吗？是否发生了过拟合？
 
-**建议**：
+# 回测初始参数
+initial_capital = 1_000_000
+nav = initial_capital
+position = 0
+cash = nav
+holding = False
+window=20
 
-* 检查 `pred` 与未来3天真实收益的相关性分布，均值接近 0 且 p 值很高就属于无效信号。
-* 可直接用 `corr = test_df[['pred','y_3d']].corr().iloc[0,1]` 验证信号有效性。
+records = []
 
----
+# 从第20天开始，每日循环决策
+for i in range(window, len(gold_df)-1):
 
-## 2. **策略参数不适合实际市场**
+    date = gold_df.loc[i, 'date']
+    price = gold_df.loc[i, 'px']
 
-* 你现在的参数（如 compare\_window=20，entry=0.5，exit=0.2）可能太“宽松”或“收敛”，
+    # 过去20天的信号历史
+    signal_hist = gold_df['pred'].iloc[i-window:i].dropna()
+    if len(signal_hist) < window:
+        continue
 
-  * 很多行情你不开仓，反应不够敏感。
-  * 也有可能频繁开平导致成本很高（虽然没有考虑手续费，但频繁切换持仓本身会磨损收益）。
-* 买卖阈值和回撤阈值应和你的信号分布特性、波动率等适配。
+    mean_signal = signal_hist.mean()
+    std_signal = signal_hist.std()
+    today_signal = gold_df.loc[i, 'pred']
 
-**建议**：
+    # # 根据信号判断明日仓位（t+1开盘执行）
+    # if today_signal >= mean_signal + 1.5 * std_signal:
+    #     target_position = 1  # Long
+    # elif today_signal <= mean_signal - 1 * std_signal:
+    #     target_position = -1  # Short
+    # elif mean_signal - 1 * std_signal <= today_signal <= mean_signal + 1 * std_signal:
+    #     target_position = 0   # Close
+    # else:
+    #     target_position = position  # Hold (不变)
+        # ===== 根据持仓状态 & 当日 signal 决定 target_position =====
+    target_position = position      # 默认保持不变
 
-* 画出`pred`在样本区间的分布、rolling std，确保阈值设置后一年大致有10-30次交易，不要太稀疏也不要太频繁。
-* 可以多 grid search 调参，观察不同 compare\_window/entry/exit 组合的表现。
-* 可尝试极端情况（如 entry=0，即信号大于均值开仓，反之平仓），看是否表现提升。
+    if position == 0:  # 没仓位 → 判断是否开仓
+        if today_signal >= mean_signal + 1 * std_signal:
 
----
+            target_position = 1     # 建多
 
-## 3. **模型训练和回测有数据穿越/标签泄露**
+        elif today_signal <= mean_signal - 1 * std_signal:
+            target_position = -1    # 建空
 
-* 你有没有严格保证训练只用过去的数据，**预测未来**？如果模型用了未来的信息（比如滚动窗口特征计算时引入未来值），会导致实盘全然不同。
-* 回测与训练集区分要**干净**，不要混用数据。
+    elif position > 0:  # 已经 Long
 
-**建议**：
+        if today_signal <= mean_signal - 0.8 * std_signal:
+            target_position = 0     # 平多
 
-* 检查所有特征工程和模型训练逻辑，是否出现数据穿越。
-* 用 `train_df` 和 `test_df` 彻底区分，并只用训练集计算rolling mean/std、clip等。
+    elif position < 0:  # 已经 Short
+        if today_signal >= mean_signal + 0.8 * std_signal:
 
----
+            target_position = 0     # 平空
 
-## 4. **单边行情 vs. 策略适用性**
+    # 明日开盘执行调整仓位
+    next_day_price = gold_df.loc[i+1, 'px']
+    action = 'hold'
 
-* 你的 buy-and-hold 曲线一路向上，说明回测区间本身是**大牛市**或者标的单边上涨。择时策略在极端单边市里几乎都跑不过无脑持有（因为任何离场都是损失机会）。
-* 策略只有在波动、震荡或高频切换牛熊时才有优势。
+    if target_position != position:
+        # 需要调整仓位
+        cash += position * next_day_price  # 先平掉原仓位
+        position = 0
 
-**建议**：
+        if target_position == 1:
+            position = cash / next_day_price
+            cash = 0
+            action = 'open_long'
+        elif target_position == -1:
+            position = -cash / next_day_price
+            cash = cash * 2
+            action = 'open_short'
+        elif target_position == 0:
+            action = 'close'
 
-* 可以拆分不同市场阶段（上涨/震荡/下跌）分别评估策略表现。
-* 或用更长时间、多市场做回测。
+    nav = cash + position * next_day_price
 
----
+    records.append({
+        'date': gold_df.loc[i+1, 'date'],
+        'price': next_day_price,
+        'signal': today_signal,
+        'mean_signal': mean_signal,
+        'std_signal': std_signal,
+        'position': position,
+        'cash': cash,
+        'nav': nav,
+        'action': action
+    })
 
-## 5. **信号触发后持仓周期短，盈利空间有限**
+bt_df = pd.DataFrame(records).set_index('date')
 
-* 如果信号经常触发平仓，持有时间太短，无法捕捉到完整行情波段。
-* 交易频率过高但单笔收益太低。
+# buy-and-hold 基准
+bt_df['buy_and_hold_nav'] = initial_capital * bt_df['price'] / bt_df['price'].iloc[0]
 
-**建议**：
+# === 评估表现 ===
+bt_df['return'] = bt_df['nav'].pct_change().fillna(0)
+bt_df['cum_return'] = (1 + bt_df['return']).cumprod()
+bt_df['nav_peak'] = bt_df['nav'].cummax()
+bt_df['drawdown'] = bt_df['nav'] / bt_df['nav_peak'] - 1
+max_drawdown = bt_df['drawdown'].min()
 
-* 统计每笔交易持仓天数，理想中位数不少于5天。
-* 试着提高平仓阈值（让盈利空间拉大）。
+# Buy-and-Hold评估
+bt_df['bh_return'] = bt_df['buy_and_hold_nav'].pct_change().fillna(0)
+bt_df['bh_cum_return'] = (1 + bt_df['bh_return']).cumprod()
+bt_df['bh_nav_peak'] = bt_df['buy_and_hold_nav'].cummax()
+bt_df['bh_drawdown'] = bt_df['buy_and_hold_nav'] / bt_df['bh_nav_peak'] - 1
+bh_max_drawdown = bt_df['bh_drawdown'].min()
 
----
+# 年化收益率 & Sharpe
+days = len(bt_df)
+annualized_return = (bt_df['nav'].iloc[-1] / bt_df['nav'].iloc[0]) ** (252 / days) - 1
+sharpe_ratio = np.sqrt(252) * bt_df['return'].mean() / bt_df['return'].std()
 
-## 6. **其他常见技术细节**
+bh_annualized_return = (bt_df['buy_and_hold_nav'].iloc[-1] / bt_df['buy_and_hold_nav'].iloc[0]) ** (252 / days) - 1
+bh_sharpe_ratio = np.sqrt(252) * bt_df['bh_return'].mean() / bt_df['bh_return'].std()
 
-* 没有考虑交易成本、滑点，实盘表现还会更差。
-* 仓位过度反复切换会被交易摩擦完全吃掉信号优势。
-* 信号分布极度偏态，std计算受极端值干扰。
+# 输出表现
+print("==== 策略表现 ====")
+print(f"年化收益率:     {annualized_return:.2%}")
+print(f"Sharpe比率:     {sharpe_ratio:.2f}")
+print(f"最大回撤:       {max_drawdown:.2%}")
 
----
+print("\n==== Buy-and-Hold 表现 ====")
+print(f"年化收益率:     {bh_annualized_return:.2%}")
+print(f"Sharpe比率:     {bh_sharpe_ratio:.2f}")
+print(f"最大回撤:       {bh_max_drawdown:.2%}")
 
-## 🚩 **结论与后续建议**
+# === 绘图 ===
+fig, ax = plt.subplots(figsize=(12, 6))
+ax.plot(bt_df.index, bt_df['nav'], label='Strategy NAV', color='blue')
+ax.plot(bt_df.index, bt_df['buy_and_hold_nav'], label='Buy-and-Hold NAV', color='orange', linestyle='--')
 
-* **首先**，画出`pred`的时序图和分布直方图，检查信号有效性和波动。
-* **其次**，调参（如 entry/exit 阈值、compare\_window 长短）看整体交易次数和绩效曲线变化。
-* **再次**，用`pred`和`y_3d`做简单相关性和分层（top/bottom 10%分组）的平均收益检验。
-* **最后**，用“单边市场下择时不如持有”的结论，提醒策略适用性。
+for idx, row in bt_df.iterrows():
+    if row['action'] == 'open_long':
+        ax.scatter(idx, row['nav'], marker='^', color='green', s=100, label='Long Entry')
+    elif row['action'] == 'open_short':
+        ax.scatter(idx, row['nav'], marker='v', color='red', s=100, label='Short Entry')
+    elif row['action'] == 'close':
+        ax.scatter(idx, row['nav'], marker='o', color='black', s=100, label='Exit')
 
----
+handles, labels = ax.get_legend_handles_labels()
+by_label = dict(zip(labels, handles))
+ax.legend(by_label.values(), by_label.keys())
 
-## 🌟【小实验代码推荐】
-
-```python
-# 1. 检查信号相关性
-print("相关系数：", test_df[['pred','y_3d']].corr().iloc[0,1])
-
-# 2. 看信号分布
-test_df['pred'].hist(bins=100)
-plt.title('Pred Signal Distribution')
+ax.set_title('Daily Dynamic Signal Backtest (Gold Theme)')
+ax.set_xlabel('Date')
+ax.set_ylabel('NAV')
+ax.grid(True)
+plt.tight_layout()
 plt.show()
-
-# 3. top10%/bottom10% 信号与未来收益
-bins = pd.qcut(test_df['pred'], q=10, duplicates='drop')
-print(test_df.groupby(bins)['y_3d'].mean())
-```
-
----
-
-如需更细致分析或具体诊断`pred`信号/回测代码，**可贴出模型训练、信号预测、真实未来收益的部分数据/图表，我能帮你逐步定位“跑输基准”的关键原因**！
