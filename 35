@@ -1,0 +1,166 @@
+当然，以下是你原先回测框架的**完整修改版**，实现了
+
+* **动态连续仓位**
+* 仓位通过z-score后用`tanh`平滑映射
+
+**你只需要将下方代码直接替换原本的循环部分和记录部分，主流程无需其他更改即可。**
+
+---
+
+```python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# 假设你的 result_df1, df_clean, test_df, y_pred 已经存在
+
+# 仅取Gold theme进行回测
+gold_df_test = test_df[test_df["theme"] == 'Gold'].copy()
+gold_df = gold_df_test.sort_values('date').reset_index(drop=True)
+gold_df["px"] = (1 + gold_df["ret"]).cumprod()
+
+# 回测初始参数
+initial_capital = 1_000_000
+window = 20
+
+records = []
+
+# 初始化
+cash = initial_capital
+position = 0    # 持有的头寸(单位：份额，不是市值)
+
+for i in range(window, len(gold_df)-1):
+    date = gold_df.loc[i, 'date']
+    price = gold_df.loc[i, 'px']
+
+    # 过去window天的信号
+    signal_hist = gold_df['pred'].iloc[i-window:i].dropna()
+    if len(signal_hist) < window:
+        continue
+
+    mean_signal = signal_hist.mean()
+    std_signal = signal_hist.std()
+    today_signal = gold_df.loc[i, 'pred']
+
+    # ====== 动态连续仓位 ======
+    signal_z = (today_signal - mean_signal) / (std_signal + 1e-8)
+    scale = 1.0     # 你可以调大一些，如果想让仓位整体更大，比如1.2, 1.5都可以试试
+    target_position = np.tanh(scale * signal_z)  # [-1,1]之间连续
+
+    # ====== 明日开盘调整仓位 ======
+    next_day_price = gold_df.loc[i+1, 'px']
+
+    # 计算当前总资产
+    nav = cash + position * next_day_price
+    # 期望的新持仓份额
+    desired_position = nav * target_position / next_day_price
+    # 需要调整的份额
+    delta_pos = desired_position - position
+
+    action = 'hold'
+    if abs(delta_pos) > 1e-8:
+        # 以next_day_price买入/卖出
+        cash -= delta_pos * next_day_price
+        position += delta_pos
+        if target_position > 0 and delta_pos > 0:
+            action = 'add_long'
+        elif target_position < 0 and delta_pos < 0:
+            action = 'add_short'
+        elif target_position == 0:
+            action = 'close'
+        else:
+            action = 'adjust'
+
+    nav = cash + position * next_day_price
+
+    records.append({
+        'date': gold_df.loc[i+1, 'date'],
+        'price': next_day_price,
+        'signal': today_signal,
+        'mean_signal': mean_signal,
+        'std_signal': std_signal,
+        'signal_z': signal_z,
+        'target_position': target_position,
+        'position': position,
+        'cash': cash,
+        'nav': nav,
+        'action': action
+    })
+
+bt_df = pd.DataFrame(records).set_index('date')
+
+# buy-and-hold 基准
+bt_df['buy_and_hold_nav'] = initial_capital * bt_df['price'] / bt_df['price'].iloc[0]
+
+# === 评估表现 ===
+bt_df['return'] = bt_df['nav'].pct_change().fillna(0)
+bt_df['cum_return'] = (1 + bt_df['return']).cumprod()
+bt_df['nav_peak'] = bt_df['nav'].cummax()
+bt_df['drawdown'] = bt_df['nav'] / bt_df['nav_peak'] - 1
+max_drawdown = bt_df['drawdown'].min()
+
+# Buy-and-Hold评估
+bt_df['bh_return'] = bt_df['buy_and_hold_nav'].pct_change().fillna(0)
+bt_df['bh_cum_return'] = (1 + bt_df['bh_return']).cumprod()
+bt_df['bh_nav_peak'] = bt_df['buy_and_hold_nav'].cummax()
+bt_df['bh_drawdown'] = bt_df['buy_and_hold_nav'] / bt_df['bh_nav_peak'] - 1
+bh_max_drawdown = bt_df['bh_drawdown'].min()
+
+# 年化收益率 & Sharpe
+days = len(bt_df)
+annualized_return = (bt_df['nav'].iloc[-1] / bt_df['nav'].iloc[0]) ** (252 / days) - 1
+sharpe_ratio = np.sqrt(252) * bt_df['return'].mean() / bt_df['return'].std()
+
+bh_annualized_return = (bt_df['buy_and_hold_nav'].iloc[-1] / bt_df['buy_and_hold_nav'].iloc[0]) ** (252 / days) - 1
+bh_sharpe_ratio = np.sqrt(252) * bt_df['bh_return'].mean() / bt_df['bh_return'].std()
+
+# 输出表现
+print("==== 策略表现 ====")
+print(f"年化收益率:     {annualized_return:.2%}")
+print(f"Sharpe比率:     {sharpe_ratio:.2f}")
+print(f"最大回撤:       {max_drawdown:.2%}")
+
+print("\n==== Buy-and-Hold 表现 ====")
+print(f"年化收益率:     {bh_annualized_return:.2%}")
+print(f"Sharpe比率:     {bh_sharpe_ratio:.2f}")
+print(f"最大回撤:       {bh_max_drawdown:.2%}")
+
+# === 绘图 ===
+fig, ax = plt.subplots(figsize=(12, 6))
+ax.plot(bt_df.index, bt_df['nav'], label='Strategy NAV', color='blue')
+ax.plot(bt_df.index, bt_df['buy_and_hold_nav'], label='Buy-and-Hold NAV', color='orange', linestyle='--')
+
+for idx, row in bt_df.iterrows():
+    if row['action'] in ['add_long']:
+        ax.scatter(idx, row['nav'], marker='^', color='green', s=80, label='Long Add')
+    elif row['action'] in ['add_short']:
+        ax.scatter(idx, row['nav'], marker='v', color='red', s=80, label='Short Add')
+    elif row['action'] == 'close':
+        ax.scatter(idx, row['nav'], marker='o', color='black', s=80, label='Exit')
+
+handles, labels = ax.get_legend_handles_labels()
+by_label = dict(zip(labels, handles))
+ax.legend(by_label.values(), by_label.keys())
+
+ax.set_title('Dynamic Positioning Backtest (Gold Theme)')
+ax.set_xlabel('Date')
+ax.set_ylabel('NAV')
+ax.grid(True)
+plt.tight_layout()
+plt.show()
+```
+
+---
+
+### **重点解释：**
+
+* 仓位大小由：
+  `target_position = np.tanh(scale * signal_z)`
+  动态决定，可连续变化（满仓、半仓、小仓等都可以）
+* `scale` 可以调整整体仓位高低（比如调1.2、1.5甚至2都行）
+* 资产结算、换仓操作全部按照这个动态仓位执行
+
+如果你想让仓位**更激进或更保守**，直接改 `scale` 参数即可。
+如需其它细节（比如手续费、最大换手率等），可以再加。
+
+如需**多theme批量回测、分组**等，也可以随时要。
