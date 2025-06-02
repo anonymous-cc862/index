@@ -1,6 +1,4 @@
-当然，下面是**带止盈（Take Profit）、止损（Cut Loss）**、且在图上高亮所有关键信号点（开仓、平仓、止盈、止损）的完整回测代码，可直接运行：
-
-```python
+#止盈止损
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -18,8 +16,8 @@ holding = 0         # 1=long, -1=short, 0=空仓
 window = 20
 
 # 止盈/止损参数（可调）
-take_profit = 0.08  # 止盈线（8%）
-cut_loss = -0.04    # 止损线（-4%）
+take_profit = 0.2  # 止盈线（8%）
+cut_loss = -0.1    # 止损线（-4%）
 
 entry_price = None  # 记录建仓时的价格
 
@@ -189,15 +187,3 @@ ax.set_ylabel('NAV')
 ax.grid(True)
 plt.tight_layout()
 plt.show()
-```
-
----
-
-**说明：**
-
-* 止盈/止损、信号反转都能触发平仓，action 字段会高亮记录。
-* 图中：绿色^为多头开仓，红色v为空头开仓，金色P为止盈，紫色X为止损，黑色o为信号反转平仓。
-* 止盈/止损优先于信号反转（如有不同需求可微调顺序）。
-* 你只需要准备好`gold_df_test`即可直接运行。
-
-如需调参、画额外指标、分析分布等，都可再补充！
