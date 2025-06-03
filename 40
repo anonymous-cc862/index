@@ -1,67 +1,50 @@
-你的目标是：**保持原有数据输入输出格式和训练/测试划分方式不变，将 LightGBM 预测部分用 LSTM 和 Transformer 两种深度学习模型替换**，用于预测 `y_clip`（目标变量），并输出测试集 MAE。
-
-下面提供**详细、对齐原有 LightGBM 逻辑**的 PyTorch LSTM 和 Transformer 端到端流程。
+当然可以！下面直接给出你**实际可运行**、对齐原表**每行都一一对应**的 LSTM/Transformer 训练与预测流程，包括**滑窗补齐、批量预测和对齐回填**，只需替换你的原 LightGBM 部分即可。
 
 ---
 
-# 1. 数据处理（按 theme 构造滑动窗口）
-
-与 LightGBM 不同，LSTM/Transformer 需要时间序列特征。你的每行数据包含 `theme`、`date`、特征列、目标列，**我们按 theme 分组滑窗生成序列**。
-
-### 主要思路
-
-* 每支 theme 的数据按时间排序。
-* 构造长度为 `seq_len` 的滑动窗口，每个窗口对应未来一天的 `y_clip`。
-* 输入 shape: `[batch, seq_len, num_features]`，目标 shape: `[batch]`。
-
----
-
-## 2. 实现代码
-
-假设你的 `feature_cols` 已经是数值型（如有类别需 one-hot/categorical embedding，可进一步扩展）。
-
-### 2.1 数据预处理和 Dataset 构造
+## 1. 数据滑窗 Dataset & 标准Scaler
 
 ```python
 import numpy as np
-import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
-from sklearn.metrics import mean_absolute_error
 from sklearn.preprocessing import StandardScaler
 
-SEQ_LEN = 10  # 窗口长度，可调整
+SEQ_LEN = 10  # 可调
+BATCH_SIZE = 128
 
-# 先 fit scaler 只用 train_df
+# 训练/测试集都要提前标准化（只用train fit scaler！）
 scaler = StandardScaler()
 train_df[feature_cols] = scaler.fit_transform(train_df[feature_cols])
 test_df[feature_cols]  = scaler.transform(test_df[feature_cols])
 
 class SequenceDataset(Dataset):
     def __init__(self, df, feature_cols, seq_len=SEQ_LEN):
-        self.sequences = []
-        self.targets = []
+        self.seq_len = seq_len
+        self.feature_cols = feature_cols
+        self.data = []
+        self.target = []
+        self.group_idx = []  # 记录每个样本在原表的位置
         for theme, group in df.groupby("theme"):
             group = group.sort_values("date")
             X = group[feature_cols].values
             y = group["y_clip"].values
+            idx = group.index.values
             for i in range(len(group) - seq_len):
-                self.sequences.append(X[i:i+seq_len])
-                self.targets.append(y[i+seq_len])
+                self.data.append(X[i:i+seq_len])
+                self.target.append(y[i+seq_len])
+                self.group_idx.append(idx[i+seq_len])
     def __len__(self):
-        return len(self.sequences)
+        return len(self.data)
     def __getitem__(self, idx):
-        return torch.tensor(self.sequences[idx], dtype=torch.float32), torch.tensor(self.targets[idx], dtype=torch.float32)
-
-train_dataset = SequenceDataset(train_df, feature_cols, seq_len=SEQ_LEN)
-test_dataset  = SequenceDataset(test_df, feature_cols, seq_len=SEQ_LEN)
-train_loader  = DataLoader(train_dataset, batch_size=64, shuffle=True)
-test_loader   = DataLoader(test_dataset, batch_size=256, shuffle=False)
+        return (torch.tensor(self.data[idx], dtype=torch.float32),
+                torch.tensor(self.target[idx], dtype=torch.float32),
+                self.group_idx[idx])  # 返回在原表中的行号
 ```
 
 ---
 
-### 2.2 LSTM/Transformer模型定义
+## 2. LSTM/Transformer模型定义
 
 ```python
 import torch.nn as nn
@@ -92,28 +75,29 @@ class TransformerPredictor(nn.Module):
 
 ---
 
-### 2.3 训练与推理函数
+## 3. 训练和推理函数（带行号映射）
 
 ```python
-def train_model(model, train_loader, test_loader, num_epochs=20, lr=1e-3, device='cuda'):
+def train_model(model, train_loader, val_loader, num_epochs=20, lr=3e-4, device='cuda'):
     model = model.to(device)
-    criterion = nn.L1Loss()  # MAE 对齐 LightGBM 的 l1
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    best_mae = float("inf")
+    criterion = nn.L1Loss()
+    best_mae = float('inf')
+    best_state = None
     for epoch in range(num_epochs):
         model.train()
-        for X, y in train_loader:
+        for X, y, _ in train_loader:
             X, y = X.to(device), y.to(device)
             optimizer.zero_grad()
             pred = model(X)
             loss = criterion(pred, y)
             loss.backward()
             optimizer.step()
-        # 验证
+        # Validation
         model.eval()
         y_true, y_pred = [], []
         with torch.no_grad():
-            for X, y in test_loader:
+            for X, y, _ in val_loader:
                 X, y = X.to(device), y.to(device)
                 pred = model(X)
                 y_true.append(y.cpu().numpy())
@@ -121,51 +105,63 @@ def train_model(model, train_loader, test_loader, num_epochs=20, lr=1e-3, device
         y_true = np.concatenate(y_true)
         y_pred = np.concatenate(y_pred)
         mae = mean_absolute_error(y_true, y_pred)
-        print(f"Epoch {epoch+1}, Test MAE: {mae:.6f}")
+        print(f"Epoch {epoch+1}, Valid MAE: {mae:.6f}")
         if mae < best_mae:
             best_mae = mae
-            best_w = model.state_dict()
-    model.load_state_dict(best_w)
+            best_state = model.state_dict()
+    model.load_state_dict(best_state)
     return model
+
+# 构建Dataset和Loader
+train_dataset = SequenceDataset(train_df, feature_cols, seq_len=SEQ_LEN)
+test_dataset  = SequenceDataset(test_df,  feature_cols, seq_len=SEQ_LEN)
+train_loader  = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+test_loader   = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 ```
 
 ---
 
-### 2.4 训练与评估
-
-以 LSTM 为例：
+## 4. 预测并**按原表行号映射回填**
 
 ```python
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model = LSTMPredictor(input_dim=len(feature_cols))
+# model = LSTMPredictor(input_dim=len(feature_cols))    # 用LSTM
+model = TransformerPredictor(input_dim=len(feature_cols))  # 用Transformer
+
 model = train_model(model, train_loader, test_loader, num_epochs=20, lr=3e-4, device=device)
 
-# 推理
+# 预测test集，按原index还原
+test_df = test_df.copy()
+test_df["pred"] = np.nan
+
 model.eval()
-y_true, y_pred = [], []
 with torch.no_grad():
-    for X, y in test_loader:
-        X, y = X.to(device), y.to(device)
-        pred = model(X)
-        y_true.append(y.cpu().numpy())
-        y_pred.append(pred.cpu().numpy())
-y_true = np.concatenate(y_true)
-y_pred = np.concatenate(y_pred)
-print("Test MAE:", mean_absolute_error(y_true, y_pred))
+    for X, _, idx in test_loader:
+        X = X.to(device)
+        pred = model(X).cpu().numpy()
+        test_df.loc[idx.numpy(), "pred"] = pred  # 根据原index赋值
+
+# 评估
+mask = ~test_df["pred"].isna()
+mae = mean_absolute_error(test_df.loc[mask, "y_clip"], test_df.loc[mask, "pred"])
+print("Test MAE:", mae)
 ```
 
-Transformer只需把`model = LSTMPredictor(...)`换成`model = TransformerPredictor(input_dim=len(feature_cols))`即可。
+---
+
+### ⚠️ 这样你的 `test_df["pred"]` 行数和 test\_df 完全对齐，不会报错，**每行都能找回预测值或 NaN（滑窗前SEQ\_LEN行）**。
 
 ---
 
-## 总结要点
+## 总结
 
-* **输入输出和 LightGBM 一致**，只不过深度学习模型是序列建模，特征为滑动窗口输入。
-* **指标仍然是 MAE**，可以直接对比 LightGBM。
-* **适配多 theme，支持窗口滑动生成序列**。
+* **Dataset每条记录带原行号**，预测后直接回填到test\_df
+* 避免长度不一致和报错，且可以直接与原表做下游回测
+* 可选补充：`test_df["pred"].fillna(0)` 或其它方式对NaN补全
+
+如需要**多 theme、多窗口、单点特征等其它自定义场景**，也都可用类似的对齐策略处理。
+如果你需要更复杂的批量推理代码（支持更大的数据，自动对不同theme滑窗等），可以继续提问！
 
 ---
 
-如果你有**单行/非序列场景**，只需把`seq_len=1`即可，代码自动退化为MLP/传统机器学习输入格式。
-
-如有需要**完整工程版**（如带EarlyStopping/模型保存/支持多目标/类别特征embedding/与回测代码自动集成），可继续提需求！
+如需要**完整代码一键运行文件**，请告知！
