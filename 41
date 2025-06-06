@@ -1,0 +1,362 @@
+result_df=pd.read_csv('return_vol_chg_pct.csv')
+result_df = result_df.loc[:, ~result_df.columns.str.contains("^Unnamed")]
+result_df["date"] = pd.to_datetime(result_df["date"])
+result_df1=pd.read_csv('result_df1.csv')
+result_df1 = result_df1.loc[:, ~result_df1.columns.str.contains("^Unnamed")]
+result_df1["date"] = pd.to_datetime(result_df1["date"])
+result_df1 = result_df1.sort_values(["theme", "date"])
+#result_df1=result_df1.drop(['volume'],axis=1)
+result_df=result_df.drop(['ret'],axis=1)
+result_df1=result_df1.merge(result_df, on=['date', 'theme'],how="left")
+result_df1=result_df1[['date', 'theme', 'volume','turnover', 'crowd', 'crowd_c', 'mom_1m',
+       'mean_corr_5d', 'ret', 'vol_chg_pct']]
+
+medium_themes = df_clean.loc[df_clean['size_label'] == 'medium', 'theme']
+result_df1_medium = result_df1[result_df1['theme'].isin(medium_themes)].reset_index(drop=True)
+#删去volume是0的行，不交易
+result_df1_medium = result_df1_medium[result_df1_medium['volume'] != 0].reset_index(drop=True)
+
+import pandas as pd
+# 1) 确保 date 列是 datetime
+result_df1_medium['date'] = pd.to_datetime(result_df1_medium['date'])
+
+# 2) 先按日期统计当天包含的 theme 数量
+theme_cnt = result_df1_medium.groupby('date')['theme'].nunique()
+# 3) 找出：周末(weekday>=5) 且 theme 数 < 10 的日期
+bad_dates = theme_cnt[
+    (theme_cnt < 10) & (theme_cnt.index.weekday >= 5)
+].index
+# 4) 删掉这些日期对应的所有行
+result_df1_medium = result_df1_medium[~result_df1_medium['date'].isin(bad_dates)].reset_index(drop=True)
+result_df1_medium
+
+result_df1_medium['turn_chg_pct'] = (
+    result_df1_medium
+      .groupby('theme', group_keys=False)['turnover']
+      .pct_change()
+)
+
+MXWD_ret=pd.DataFrame(response.json()['content'])
+
+# --------------------------------------------------
+
+ret_mkt = (MXWD_ret[['date', 'CHG_PCT_1D']]
+           .rename(columns={'CHG_PCT_1D': 'ret_mkt'}))      # ← 改成你想要的列名
+ret_mkt['date'] = pd.to_datetime(ret_mkt['date']).dt.date
+ret_mkt['date'] = pd.to_datetime(ret_mkt['date'])
+ret_mkt['ret_mkt'] = pd.to_numeric(ret_mkt['ret_mkt'], errors='coerce')
+
+
+import pandas as pd
+
+import numpy as np
+
+from scipy.stats import zscore
+
+import ta            # pip install ta  (比 talib 更容易装；rsi/gvol 等函数名类似)
+# ---------- 1. 
+#数据准备 ----------
+
+df = result_df1_medium.copy()#df_clipped.copy()
+df["date"] = pd.to_datetime(df["date"])
+df = df.sort_values(["theme", "date"])
+price_source = "ret"             # ① 只有收益率就先用它累积近似价格
+
+# 用收益率重建一个"伪价格"索引，初始价取 1
+
+df["px"] = df.groupby("theme")[price_source].transform(
+    lambda r: (1 + r).cumprod()
+)
+# ---------- 2. 
+#现有特征 ------------
+grp = df.groupby("theme", group_keys=False)
+
+# 2-1 3 日累计收益 (rolling 累积)
+df["ret_3d_m"] = grp["px"].apply(lambda s: s.rolling(3).mean())
+df["px_3d_c"] = grp["px"].transform(lambda s: s / s.shift(3) - 1)#
+df["ret_3d_std"] = grp["ret"].apply(lambda s: s.rolling(3).std())
+
+# 2-3 RSI_14
+df["rsi_14"] = grp["px"].apply(lambda s: ta.momentum.rsi(s, window=14))
+
+# 2-4 成交量因子（volume / 20d均值）
+df["vol_rel_20d"] = (
+    df.groupby("theme")["volume"]
+      .transform(lambda s: s / s.rolling(window=20, min_periods=10).mean())
+)
+df["vol_20d_mean"] = (
+    df.groupby("theme")["volume"]
+      .transform(lambda s: s.rolling(window=20, min_periods=10).mean())
+)
+#衍生特征 ----------
+# 3-1 动量：5/10/20 d 累积收益
+for k in (5, 10, 20):
+    df[f"mom_{k}d"] = grp["px"].apply(lambda s: s.pct_change(k))
+
+# 3-3 成交额 rolling-zscore
+def rolling_z(series, w=20, min_p=10):
+    ma = series.rolling(w, min_periods=min_p).mean()
+    sd = series.rolling(w, min_periods=min_p).std()
+    return (series - ma) / sd
+df["turnover_z"] = df.groupby("theme")["turnover"].transform(rolling_z)
+
+w_fast, w_slow = 5, 20
+df['wma_fast'] = grp['px'].apply(lambda s: s.ewm(span=w_fast, min_periods=3, adjust=False).mean())
+df['wma_slow'] = grp['px'].apply(lambda s: s.ewm(span=w_slow, min_periods=10, adjust=False).mean())
+df['ma_spread'] = df['wma_fast'] / df['wma_slow'] - 1            # 均线差
+
+# ③ 逐 theme 做 20 日滚动皮尔逊相关
+df["ret"] = df.groupby("theme")["px"].pct_change()
+
+theme_idx_ret = (
+    df.groupby(["theme", "date"])["ret"]
+      .mean()
+      .rename("ret_idx")               # 每天每个 theme 的指数收益
+      .reset_index()
+)
+
+# ② 合回原表，得到每行两列：个股 ret、指数 ret_idx
+df = df.merge(theme_idx_ret, on=["theme", "date"], how="left")
+
+def rolling_corr(g, window=20, min_p=10):
+    return (
+        g[["ret", "ret_idx"]]
+        .rolling(window, min_periods=min_p)
+        .corr()
+        .unstack()               # ↘ 把 (ret, ret_idx) 两行转列
+        .iloc[:, 1]              # 取 ret 与 ret_idx 的相关
+    )
+
+df["corr_20d"] = (
+    df.sort_values("date")       # rolling 需要先按日期排序
+      .groupby("theme", group_keys=False)
+      .apply(rolling_corr)
+)
+
+
+# ret_mkt = (           # 每天跨 theme 等权平均
+#     df.groupby("date")["ret"]
+#       .mean()
+#       .rename("ret_mkt")          # 当天市场指数收益
+#       .reset_index()
+# )
+
+# 合回原表
+
+df = df.merge(ret_mkt, on="date", how="left")
+grp = df.groupby("theme", group_keys=False)   # ← 重新建！
+# -------------------------------------------------------------
+# ⑤ 相对收益：theme 指数 vs. 全市场
+#     形式1：差值      -> ret_idx - ret_mkt
+#     形式2：超额比率  -> (1+ret_idx)/(1+ret_mkt) - 1
+# -------------------------------------------------------------
+#f["rel_ret_idx"]  = df["ret_idx"] - df["ret_mkt"]               # 常用
+df["rel_ret_ratio"] = (1 + df["ret_idx"]) / (1 + df["ret_mkt"]) - 1  # 若想要比率
+
+# 布林带宽： (上轨-下轨)/中轨
+def bollinger_bandwidth(s, n=20,min_p=10, k=2):
+    mid = s.rolling(n, min_periods=min_p).mean()
+    std = s.rolling(n, min_periods=min_p).std()
+    upper, lower = mid + k*std, mid - k*std
+    return (upper - lower) / mid
+df['bb_width_20d'] = grp['px'].apply(bollinger_bandwidth)
+
+df['ret_skew_20d'] = grp['ret'].apply(lambda s: s.rolling(20, min_periods=10).skew())
+
+df['ret_kurt_20d'] = grp['ret'].apply(lambda s: s.rolling(20, min_periods=10).kurt())
+
+def rolling_beta_alpha(sub, w=30, min_p=10):
+
+    x = sub['ret_mkt']
+
+    y = sub['ret']
+
+    beta  = y.rolling(w, min_periods=min_p).cov(x) / x.rolling(w, min_periods=min_p).var()
+
+    alpha = y.rolling(w, min_periods=min_p).mean() - beta * x.rolling(w, min_periods=min_p).mean()
+
+    return pd.DataFrame({'beta_30d': beta, 'alpha_30d': alpha})
+
+df[['beta_30d', 'alpha_30d']] = grp.apply(rolling_beta_alpha)   # 不再 droplevel
+
+
+hi52 = grp['px'].apply(lambda s: s.rolling(60, min_periods=10).max())
+lo52 = grp['px'].apply(lambda s: s.rolling(60, min_periods=10).min())
+df['pct_to_hi52'] = (df['px'] - hi52) / hi52
+df['pct_to_lo52'] = (df['px'] - lo52) / lo52
+
+df['px_chg1d']  = grp['px'].pct_change()
+df['vol_chg1d'] = grp['volume'].pct_change()
+df['turnover_chg1d'] = grp['turnover'].pct_change()
+
+# def inf_to_bound(df, col):
+
+#     """把指定列中的 ±inf 替换为该列的最大/最小有限值"""
+
+#     finite_mask = np.isfinite(df[col])
+
+#     if not finite_mask.any():          # 全是 inf 或 nan
+
+#         df[col] = np.nan
+
+#         return df
+
+#     max_val = df.loc[finite_mask, col].max()
+
+#     min_val = df.loc[finite_mask, col].min()
+
+#     df[col] = df[col].replace({np.inf: max_val, -np.inf: min_val})
+
+#     return df
+# df = inf_to_bound(df,'turnover_chg1d')
+df['up_px_up_vol'] = ((df['px_chg1d'] > 0) & (df['vol_chg1d'] > 0)).astype(int)
+# OBV（On-Balance Volume）
+df['obv'] = grp.apply(lambda g: (np.sign(g['px_chg1d']) * g['volume']).cumsum()).values
+df['obv_z20'] = grp['obv'].apply(lambda s: (s - s.rolling(20,min_periods=10).mean()) / s.rolling(20,min_periods=10).std())
+
+# # ---------- 8.时间/日历效应 ------------------------------
+
+df['dow'] = df['date'].dt.dayofweek          # 周几 [0,4]
+for d in range(5):
+    df[f'dow_{d}'] = (df['dow'] == d).astype(int)
+df['eom'] = (df['date'] + pd.tseries.offsets.BMonthEnd(0) ==
+             df['date']).astype(int)         # 月末 dummy
+# ---------- 4. 
+#收尾 ----------
+df["y_1d"] = (
+    df.groupby("theme")["px"]
+      .apply(lambda s: s.shift(-1) / s - 1)    # shift(-5) 表示向前看 5 天
+)
+df["y_5d"] = (
+    df.groupby("theme")["px"]
+      .apply(lambda s: s.shift(-5) / s - 1)    # shift(-5) 表示向前看 5 天
+)
+df['date']=pd.to_datetime(df['date'])
+
+df_clean=df[['date','theme', 'ret','turnover_chg1d',#'turnover', #,# 'turnover', 
+             'crowd', 'crowd_c', 'mom_1m', 'mean_corr_5d', 
+              "px_3d_c",#"corr_20d",
+        'ret_3d_m', 'ret_3d_std', 'rsi_14',#'volume','vol_rel_20d',#"px",
+       'mom_5d', 'mom_10d', 'mom_20d', 'turnover_z', 'wma_fast','wma_slow', 'ma_spread',
+       'bb_width_20d','ret_skew_20d','ret_kurt_20d','beta_30d', 'alpha_30d',
+       'pct_to_hi52', 'pct_to_lo52',#'px_chg1d', 
+       'vol_chg_pct',#'vol_chg1d', #'up_px_up_vol', #'obv', 'obv_z20', 
+       'dow','dow_0', 'dow_1', 'dow_2', 'dow_3', 'dow_4', 'eom',
+       'y_1d']]
+df_clean=df_clean.dropna()
+
+from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_squared_error
+
+df_clean = df_clean.copy()                      
+df_clean["date"] = pd.to_datetime(df_clean["date"])    # 确保日期是 datetime64
+
+# train / test 
+cutoff = pd.Timestamp("2024-08-15")
+train_df = df_clean[df_clean["date"] <= cutoff].copy()
+test_df  = df_clean[df_clean["date"] >  cutoff].copy()
+
+#  计算 per-theme 分位 & clip 
+
+# a) 计算分位（只看 train）
+q = (train_df.groupby("theme")["y_1d"]
+                .quantile([0.01, 0.99])
+                .unstack(level=1)
+                .rename(columns={0.01: "low", 0.99: "high"}))
+
+# b) 把分位 merge 回两份数据
+train_df = train_df.merge(q, on="theme", how="left")
+#test_df  = test_df.merge(q, on="theme", how="left")
+
+# c) clip
+train_df["y_clip"] = train_df["y_1d"].clip(train_df["low"], train_df["high"])
+#test_df["y_clip"]  = test_df["y_1d"].clip(test_df["low"], test_df["high"])
+
+
+fix_cols = ["theme"]          
+
+for col in fix_cols:
+    if col == "theme":
+        # 1) 作为类别特征，直接转 category
+        train_df[col] = train_df[col].astype("category")
+        test_df[col]  = test_df[col].astype("category")
+    else:
+        # 2) 其余 object 字符串列，尝试转成 float
+        train_df[col] = pd.to_numeric(train_df[col], errors="coerce")
+        test_df[col]  = pd.to_numeric(test_df[col], errors="coerce")
+
+# （如果某列转成数值后产生 NaN，可再用 fillna 或 dropna 处理）
+
+# train_df[col].fillna(0, inplace=True)
+
+# 重新构造数据集 
+
+feature_cols = [
+    c for c in train_df.columns
+    if c not in ["date", "y_1d", "y_clip", "low", "high",'theme']
+]
+
+# 1) 随机打乱—— frac=1 表示取全部行；random_state 保证可重复
+
+shuffled_df = train_df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+# 2) 90 % / 10 % 切分
+
+split_idx   = int(len(shuffled_df) * 0.9)
+
+train_part  = shuffled_df.iloc[:split_idx]
+
+valid_part  = shuffled_df.iloc[split_idx:]
+
+# 3) 构造 LightGBM 数据集
+
+train_set = lgb.Dataset(
+
+    train_part[feature_cols],
+
+    label=train_part["y_clip"],
+
+    # categorical_feature=cat_cols
+
+)
+
+valid_set = lgb.Dataset(
+
+    valid_part[feature_cols],
+
+    label=valid_part["y_clip"],
+
+    # categorical_feature=cat_cols
+
+)
+
+#  训练
+# # huber
+params = {
+    "objective": "huber",
+    "alpha": 0.9, #0.9,
+    #"huber_delta": 0.00001,
+    "learning_rate":0.03,# 0.03,
+    "num_leaves": 64,
+    "feature_fraction": 0.7,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 10,
+    "lambda_l2": 2,
+    "metric": "l1",
+    "verbose": -1,
+    "seed": 42
+}
+
+model = lgb.train(
+    params,
+    train_set,
+    num_boost_round=2000,
+    valid_sets=[valid_set], ####
+    callbacks=[lgb.early_stopping(stopping_rounds=100, verbose=False)]
+)
+
+# 推理 
+
+y_pred = model.predict(test_df[feature_cols], num_iteration=model.best_iteration)
+print("Test MAE:", mean_absolute_error(test_df["y_1d"], y_pred))
+y_pred_train = model.predict(train_df[feature_cols], num_iteration=model.best_iteration)
