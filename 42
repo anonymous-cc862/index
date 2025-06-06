@@ -1,0 +1,211 @@
+你的需求很清晰，要**对策略进行参数网格搜索**，包括4个开/平仓z-score倍数参数和1个window参数，然后**标准化Sharpe和MaxDD，综合得到utility**，最后输出所有参数组合的Sharpe、MaxDD、utility，并给出最优参数。下面是**完整代码框架**和实现细节。
+
+---
+
+## 假设
+
+* 你的`gold_df_train`已准备好，有`date`、`ret`、`pred`三列（以及你用的`px`）。
+* 参数分别为：
+
+  * `window`：均值和标准差的回溯窗口
+  * `open_long_z`：开多仓阈值倍数
+  * `open_short_z`：开空仓阈值倍数
+  * `close_long_z`：平多仓阈值倍数
+  * `close_short_z`：平空仓阈值倍数
+
+---
+
+## 步骤
+
+### 1. 回测函数（支持参数化）
+
+把你的策略函数参数化，支持传入所有超参数：
+
+```python
+def backtest_position_param(
+    gold_df,
+    window=30,
+    open_long_z=1.0,
+    open_short_z=1.0,
+    close_long_z=0.8,
+    close_short_z=0.8,
+    scale=1.0
+):
+    import pandas as pd
+    import numpy as np
+
+    initial_capital = 1_000_000
+    nav = initial_capital
+    position = 0.0
+    cash = nav
+    holding = 0
+
+    records = []
+
+    for i in range(window, len(gold_df) - 1):
+        price = gold_df.loc[i, 'px']
+
+        signal_hist = gold_df['pred'].iloc[i-window:i].dropna()
+        if len(signal_hist) < window:
+            continue
+
+        mean_signal = signal_hist.mean()
+        std_signal = signal_hist.std()
+        today_signal = gold_df.loc[i, 'pred']
+        signal_z = (today_signal - mean_signal) / (std_signal + 1e-8)
+
+        action = 'hold'
+        position_new = position
+
+        # 开仓
+        if holding == 0:
+            if today_signal >= mean_signal + open_long_z * std_signal:
+                pos_ratio = np.tanh(scale * signal_z)
+                position_new = (cash / price) * pos_ratio
+                cash = cash - position_new * price
+                holding = 1
+                action = 'open_long'
+            elif today_signal <= mean_signal - open_short_z * std_signal:
+                pos_ratio = np.tanh(scale * signal_z)
+                position_new = (cash / price) * pos_ratio
+                cash = cash - position_new * price
+                holding = -1
+                action = 'open_short'
+            else:
+                action = 'hold'
+
+        elif holding > 0:
+            if today_signal <= mean_signal - close_long_z * std_signal:
+                cash = cash + position * price
+                position_new = 0.0
+                holding = 0
+                action = 'close_long'
+
+        elif holding < 0:
+            if today_signal >= mean_signal + close_short_z * std_signal:
+                cash = cash + position * price
+                position_new = 0.0
+                holding = 0
+                action = 'close_short'
+
+        next_day_price = gold_df.loc[i+1, 'px']
+        nav = cash + position_new * next_day_price
+
+        records.append({
+            'date': gold_df.loc[i+1, 'date'],
+            'price': next_day_price,
+            'signal': today_signal,
+            'mean_signal': mean_signal,
+            'std_signal': std_signal,
+            'signal_z': signal_z,
+            'position': position_new,
+            'cash': cash,
+            'nav': nav,
+            'action': action
+        })
+
+        position = position_new
+
+    bt_df = pd.DataFrame(records).set_index('date')
+
+    bt_df['return'] = bt_df['nav'].pct_change().fillna(0)
+    bt_df['nav_peak'] = bt_df['nav'].cummax()
+    bt_df['drawdown'] = bt_df['nav'] / bt_df['nav_peak'] - 1
+    max_drawdown = bt_df['drawdown'].min()
+    sharpe_ratio = np.sqrt(252) * bt_df['return'].mean() / (bt_df['return'].std() + 1e-9)
+    return sharpe_ratio, max_drawdown
+```
+
+---
+
+### 2. 参数网格
+
+```python
+import numpy as np
+import itertools
+import pandas as pd
+
+# 参数网格（自行调整步长和范围）
+window_grid = [20, 30, 40]
+open_long_grid = [0.8, 1.0, 1.2]
+open_short_grid = [0.8, 1.0, 1.2]
+close_long_grid = [0.5, 0.8, 1.0]
+close_short_grid = [0.5, 0.8, 1.0]
+
+param_grid = list(itertools.product(
+    window_grid, open_long_grid, open_short_grid, close_long_grid, close_short_grid
+))
+```
+
+---
+
+### 3. 网格回测和汇总
+
+```python
+results = []
+
+for params in param_grid:
+    window, open_long_z, open_short_z, close_long_z, close_short_z = params
+    sharpe, maxdd = backtest_position_param(
+        gold_df=gold_df_train,
+        window=window,
+        open_long_z=open_long_z,
+        open_short_z=open_short_z,
+        close_long_z=close_long_z,
+        close_short_z=close_short_z,
+    )
+    results.append({
+        'window': window,
+        'open_long_z': open_long_z,
+        'open_short_z': open_short_z,
+        'close_long_z': close_long_z,
+        'close_short_z': close_short_z,
+        'sharpe': sharpe,
+        'maxdd': maxdd
+    })
+
+results_df = pd.DataFrame(results)
+```
+
+---
+
+### 4. z-score标准化并计算utility
+
+```python
+from scipy.stats import zscore
+
+# 标准化
+results_df['z_sharpe'] = zscore(results_df['sharpe'])
+results_df['z_maxdd'] = zscore(results_df['maxdd'].abs())  # 用绝对值
+
+# utility = 0.7*z(Sharpe) - 0.3*z(|MaxDD|)
+results_df['utility'] = 0.7 * results_df['z_sharpe'] - 0.3 * results_df['z_maxdd']
+```
+
+---
+
+### 5. 输出结果（含最优参数）
+
+```python
+# 按utility排序，取最优一组
+results_df = results_df.sort_values('utility', ascending=False).reset_index(drop=True)
+best_params = results_df.iloc[0]
+
+print('======= All Results =======')
+print(results_df[['window', 'open_long_z', 'open_short_z', 'close_long_z', 'close_short_z', 'sharpe', 'maxdd', 'utility']])
+
+print('\n======= Best Params =======')
+print(best_params[['window', 'open_long_z', 'open_short_z', 'close_long_z', 'close_short_z', 'sharpe', 'maxdd', 'utility']])
+```
+
+---
+
+## **总结：只需替换数据即可直接用！**
+
+* 你可以根据计算资源调整参数步长和范围。
+* 上述代码会输出所有参数对应的Sharpe、MaxDD、utility，并自动找到最佳参数。
+* `results_df`里就包含了每组参数的表现，可以保存、画图等。
+
+---
+
+如果需要针对你实际数据的**全流程脚本**或想要画utility分布图，也可以贴上数据结构，我可以帮你进一步优化！
