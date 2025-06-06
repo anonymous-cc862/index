@@ -1,0 +1,212 @@
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def backtest_position_summary(
+    gold_df, window, open_long, open_short, close_long, close_short, theme, period_label, plot_folder
+):
+    initial_capital = 1_000_000
+    nav = initial_capital
+    position = 0.0
+    cash = nav
+    holding = 0
+
+    records = []
+    holding_days = 0
+    holding_days_list = []
+
+    last_action = None
+
+    for i in range(window, len(gold_df)-1):
+        date = gold_df.loc[i, 'date']
+        price = gold_df.loc[i, 'px']
+        signal_hist = gold_df['pred'].iloc[i-window:i].dropna()
+        if len(signal_hist) < window:
+            continue
+
+        mean_signal = signal_hist.mean()
+        std_signal = signal_hist.std()
+        today_signal = gold_df.loc[i, 'pred']
+        signal_z = (today_signal - mean_signal) / (std_signal + 1e-8)
+        scale = 1
+        action = 'hold'
+        position_new = position
+
+        if holding == 0:
+            if today_signal >= mean_signal + open_long * std_signal:
+                pos_ratio = np.tanh(scale * signal_z)
+                position_new = (cash / price) * pos_ratio
+                cash = cash - position_new * price
+                holding = 1
+                action = 'open_long'
+                holding_days = 1
+            elif today_signal <= mean_signal - open_short * std_signal:
+                pos_ratio = np.tanh(scale * signal_z)
+                position_new = (cash / price) * pos_ratio
+                cash = cash - position_new * price
+                holding = -1
+                action = 'open_short'
+                holding_days = 1
+            else:
+                action = 'hold'
+        elif holding > 0:
+            holding_days += 1
+            if today_signal <= mean_signal - close_long * std_signal:
+                cash = cash + position * price
+                position_new = 0.0
+                holding = 0
+                action = 'close_long'
+                holding_days_list.append(holding_days)
+                holding_days = 0
+        elif holding < 0:
+            holding_days += 1
+            if today_signal >= mean_signal + close_short * std_signal:
+                cash = cash + position * price
+                position_new = 0.0
+                holding = 0
+                action = 'close_short'
+                holding_days_list.append(holding_days)
+                holding_days = 0
+
+        next_day_price = gold_df.loc[i+1, 'px']
+        nav = cash + position_new * next_day_price
+
+        records.append({
+            'date': gold_df.loc[i+1, 'date'],
+            'price': next_day_price,
+            'signal': today_signal,
+            'mean_signal': mean_signal,
+            'std_signal': std_signal,
+            'signal_z': signal_z,
+            'position': position_new,
+            'cash': cash,
+            'nav': nav,
+            'action': action
+        })
+
+        position = position_new
+
+        # 收盘时持仓但没平仓也要计入持仓天数
+        if i == len(gold_df)-2 and holding != 0 and holding_days > 0:
+            holding_days_list.append(holding_days)
+
+    if len(records) == 0:
+        return None, None
+
+    bt_df = pd.DataFrame(records).set_index('date')
+    bt_df['buy_and_hold_nav'] = initial_capital * bt_df['price'] / bt_df['price'].iloc[0]
+    bt_df['return'] = bt_df['nav'].pct_change().fillna(0)
+    bt_df['cum_return'] = (1 + bt_df['return']).cumprod()
+    bt_df['nav_peak'] = bt_df['nav'].cummax()
+    bt_df['drawdown'] = bt_df['nav'] / bt_df['nav_peak'] - 1
+    max_drawdown = bt_df['drawdown'].min()
+    bt_df['bh_return'] = bt_df['buy_and_hold_nav'].pct_change().fillna(0)
+    bt_df['bh_cum_return'] = (1 + bt_df['bh_return']).cumprod()
+    bt_df['bh_nav_peak'] = bt_df['buy_and_hold_nav'].cummax()
+    bt_df['bh_drawdown'] = bt_df['buy_and_hold_nav'] / bt_df['bh_nav_peak'] - 1
+    bh_max_drawdown = bt_df['bh_drawdown'].min()
+    days = len(bt_df)
+    annualized_return = (bt_df['nav'].iloc[-1] / bt_df['nav'].iloc[0]) ** (252 / days) - 1
+    sharpe_ratio = np.sqrt(252) * bt_df['return'].mean() / (bt_df['return'].std() + 1e-9)
+    bh_annualized_return = (bt_df['buy_and_hold_nav'].iloc[-1] / bt_df['buy_and_hold_nav'].iloc[0]) ** (252 / days) - 1
+    bh_sharpe_ratio = np.sqrt(252) * bt_df['bh_return'].mean() / (bt_df['bh_return'].std() + 1e-9)
+
+    # 换手率=所有平仓成交量之和/初始资金
+    # 每次平仓时 position变化，即 action里含'close'
+    turnover = (
+        bt_df[bt_df['action'].str.contains('close')]['position'].abs().sum()
+        / initial_capital * bt_df['price'].mean()
+    )
+
+    # 持仓天数统计
+    if holding_days_list:
+        avg_holding = np.mean(holding_days_list)
+        min_holding = np.min(holding_days_list)
+        max_holding = np.max(holding_days_list)
+    else:
+        avg_holding = min_holding = max_holding = 0
+
+    # 画图
+    plt.figure(figsize=(12, 6))
+    plt.plot(bt_df.index, bt_df['nav'], label='Strategy NAV', color='blue')
+    plt.plot(bt_df.index, bt_df['buy_and_hold_nav'], label='Buy-and-Hold NAV', color='orange', linestyle='--')
+    for idx, row in bt_df.iterrows():
+        if row['action'] == 'open_long':
+            plt.scatter(idx, row['nav'], marker='^', color='green', s=100, label='Long Entry')
+        elif row['action'] == 'open_short':
+            plt.scatter(idx, row['nav'], marker='v', color='red', s=100, label='Short Entry')
+        elif 'close' in row['action']:
+            plt.scatter(idx, row['nav'], marker='o', color='black', s=100, label='Exit')
+    # 保证legend不重复
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    plt.legend(by_label.values(), by_label.keys())
+    plt.title(f'{theme} {period_label} Backtest')
+    plt.xlabel('Date')
+    plt.ylabel('NAV')
+    plt.grid(True)
+    plt.tight_layout()
+    # 保存图片
+    save_dir = os.path.join('picture_signal', theme)
+    os.makedirs(save_dir, exist_ok=True)
+    plt.savefig(os.path.join(save_dir, f'{theme}_{period_label}_Backtest.png'))
+    plt.close()
+
+    # 返回结果行（策略与Buy-and-Hold均返回）
+    summary = []
+    summary.append({
+        'theme': theme,
+        'period': period_label,
+        'type': 'Strategy',
+        'Annualized Return': annualized_return,
+        'Sharpe': sharpe_ratio,
+        'MaxDD': max_drawdown,
+        'turnover': turnover,
+        'avg_holding_days': avg_holding,
+        'min_holding_days': min_holding,
+        'max_holding_days': max_holding
+    })
+    summary.append({
+        'theme': theme,
+        'period': period_label,
+        'type': 'Buy-and-Hold',
+        'Annualized Return': bh_annualized_return,
+        'Sharpe': bh_sharpe_ratio,
+        'MaxDD': bh_max_drawdown,
+        'turnover': np.nan,
+        'avg_holding_days': np.nan,
+        'min_holding_days': np.nan,
+        'max_holding_days': np.nan
+    })
+    return pd.DataFrame(summary), bt_df
+
+# ==== 批量回测，生成结果汇总 ====
+def run_all_backtests(gold_df1, gold_df2, gold, window, open_long, open_short, close_long, close_short, theme):
+    results = []
+    # Train
+    df1_summary, _ = backtest_position_summary(gold_df1, window, open_long, open_short, close_long, close_short, theme, 'Train', plot_folder='picture_signal')
+    if df1_summary is not None:
+        results.append(df1_summary)
+    # Test
+    df2_summary, _ = backtest_position_summary(gold_df2, window, open_long, open_short, close_long, close_short, theme, 'Test', plot_folder='picture_signal')
+    if df2_summary is not None:
+        results.append(df2_summary)
+    # All
+    all_summary, _ = backtest_position_summary(gold, window, open_long, open_short, close_long, close_short, theme, 'All', plot_folder='picture_signal')
+    if all_summary is not None:
+        results.append(all_summary)
+    if results:
+        return pd.concat(results, ignore_index=True)
+    else:
+        return pd.DataFrame()  # 如果都没有回测数据
+
+# ===============================
+# 用法示例（假定已准备好三个DataFrame）
+
+# result_df = run_all_backtests(gold_df1, gold_df2, gold, window, open_long, open_short, close_long, close_short, theme)
+
+# print(result_df)
+这个回测框架逻辑是否正确？每天计算signal，position，cash，nav是否正确？最后计算Annualized Return': bh_annualized_return,
+        'Sharpe': bh_sharpe_ratio,是否正确？
+        'MaxDD': bh_max_drawdown
