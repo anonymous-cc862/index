@@ -1,0 +1,447 @@
+#fee & tp,cut loss
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def backtest_position_summary(
+    gold_df, window, open_long, open_short, close_long, close_short, theme, period_label, plot_folder,tp, sl,
+    cost_bps=10):
+    initial_capital = 1_000_000
+    nav = initial_capital
+    position = 0.0
+    cash = nav
+    holding = 0
+
+    records = []
+    holding_days = 0
+    holding_days_list = []
+
+    init_row = {
+        'date': gold_df.loc[window, 'date'],
+        'price': gold_df.loc[window, 'px'],
+        'signal': np.nan,
+        'mean_signal': np.nan,
+        'std_signal': np.nan,
+        'signal_z': np.nan,
+        'position': 0.0,
+        'cash': initial_capital,
+        'nav': initial_capital,
+        'action': 'init'
+    }
+    records.append(init_row)
+
+    last_action = None
+    entry_price = None
+    entry_i = None
+
+    window = int(window)  
+    for i in range(window, len(gold_df)-1):
+        date = gold_df.loc[i, 'date']
+        price = gold_df.loc[i, 'px']
+        signal_hist = gold_df['pred'].iloc[i-window:i].dropna()
+        if len(signal_hist) < window:
+            continue
+
+        mean_signal = signal_hist.mean()
+        std_signal = signal_hist.std()
+        today_signal = gold_df.loc[i, 'pred']
+        signal_z = (today_signal - mean_signal) / (std_signal + 1e-8)
+        scale = 1
+
+        # 新增历史波动率
+        price_hist = gold_df['px'].iloc[i-window:i]
+        volatility = price_hist.pct_change().std()
+
+        action = 'hold'
+        position_new = position
+
+        if holding == 0:
+            if today_signal >= mean_signal + open_long * std_signal:
+                pos_ratio = np.tanh(scale * signal_z)
+                position_new = (cash / price) * pos_ratio
+                trade_amount = abs(position_new * price)
+                fee = trade_amount * cost_bps / 10000
+                cash = cash - position_new * price - fee
+                entry_price = price
+                holding = 1
+                action = 'open_long'
+                holding_days = 1
+                entry_i = i
+            elif today_signal <= mean_signal - open_short * std_signal:
+                pos_ratio = np.tanh(scale * signal_z)
+                position_new = (cash / price) * pos_ratio
+                trade_amount = abs(position_new * price)
+                fee = trade_amount * cost_bps / 10000
+                cash = cash - position_new * price - fee
+                entry_price = price
+                holding = -1
+                action = 'open_short'
+                holding_days = 1
+                entry_i = i
+            else:
+                action = 'hold'
+
+        elif holding > 0:
+            holding_days += 1
+            ret = (price / entry_price) - 1
+            if (tp is not None) and (ret >= tp * volatility):
+                cash = cash + position * price - abs(position * price) * cost_bps / 10000
+                position_new = 0.0
+                holding = 0
+                action = 'take_profit_long'
+                holding_days_list.append(holding_days)
+                holding_days = 0
+                entry_price = None
+            elif (sl is not None) and (ret <= -sl * volatility):
+                cash = cash + position * price - abs(position * price) * cost_bps / 10000
+                position_new = 0.0
+                holding = 0
+                action = 'stop_loss_long'
+                holding_days_list.append(holding_days)
+                holding_days = 0
+                entry_price = None
+            elif today_signal <= mean_signal - close_long * std_signal:
+                cash = cash + position * price - abs(position * price) * cost_bps / 10000
+                position_new = 0.0
+                holding = 0
+                action = 'close_long'
+                holding_days_list.append(holding_days)
+                holding_days = 0
+                entry_price = None
+
+        elif holding < 0:
+            holding_days += 1
+            ret = 1 - (price / entry_price)
+            if (tp is not None) and (ret >= tp * volatility):
+                cash = cash + position * price - abs(position * price) * cost_bps / 10000
+                position_new = 0.0
+                holding = 0
+                action = 'take_profit_short'
+                holding_days_list.append(holding_days)
+                holding_days = 0
+                entry_price = None
+            elif (sl is not None) and (ret <= -sl * volatility):
+                cash = cash + position * price - abs(position * price) * cost_bps / 10000
+                position_new = 0.0
+                holding = 0
+                action = 'stop_loss_short'
+                holding_days_list.append(holding_days)
+                holding_days = 0
+                entry_price = None
+            elif today_signal >= mean_signal + close_short * std_signal:
+                cash = cash + position * price - abs(position * price) * cost_bps / 10000
+                position_new = 0.0
+                holding = 0
+                action = 'close_short'
+                holding_days_list.append(holding_days)
+                holding_days = 0
+                entry_price = None
+
+        next_day_price = gold_df.loc[i+1, 'px']
+        nav = cash + position_new * next_day_price
+
+        records.append({
+            'date': gold_df.loc[i+1, 'date'],
+            'price': next_day_price,
+            'signal': today_signal,
+            'mean_signal': mean_signal,
+            'std_signal': std_signal,
+            'signal_z': signal_z,
+            'position': position_new,
+            'cash': cash,
+            'nav': nav,
+            'action': action
+        })
+
+        position = position_new
+
+        # 收盘时持仓但没平仓也要计入持仓天数
+        if i == len(gold_df)-2 and holding != 0 and holding_days > 0:
+            holding_days_list.append(holding_days)
+
+    if len(records) == 0:
+        return None, None
+
+    bt_df = pd.DataFrame(records).set_index('date')
+    bt_df['buy_and_hold_nav'] = initial_capital * bt_df['price'] / bt_df['price'].iloc[0]
+    bt_df['return'] = bt_df['nav'].pct_change().fillna(0)
+    bt_df['cum_return'] = (1 + bt_df['return']).cumprod()
+    bt_df['nav_peak'] = bt_df['nav'].cummax()
+    bt_df['drawdown'] = bt_df['nav'] / bt_df['nav_peak'] - 1
+    max_drawdown = bt_df['drawdown'].min()
+    bt_df['bh_return'] = bt_df['buy_and_hold_nav'].pct_change().fillna(0)
+    bt_df['bh_cum_return'] = (1 + bt_df['bh_return']).cumprod()
+    bt_df['bh_nav_peak'] = bt_df['buy_and_hold_nav'].cummax()
+    bt_df['bh_drawdown'] = bt_df['buy_and_hold_nav'] / bt_df['bh_nav_peak'] - 1
+    bh_max_drawdown = bt_df['bh_drawdown'].min()
+    days = len(bt_df)
+    annualized_return = (bt_df['nav'].iloc[-1] / bt_df['nav'].iloc[0]) ** (252 / days) - 1
+    sharpe_ratio = np.sqrt(252) * bt_df['return'].mean() / (bt_df['return'].std() + 1e-9)
+    bh_annualized_return = (bt_df['buy_and_hold_nav'].iloc[-1] / bt_df['buy_and_hold_nav'].iloc[0]) ** (252 / days) - 1
+    bh_sharpe_ratio = np.sqrt(252) * bt_df['bh_return'].mean() / (bt_df['bh_return'].std() + 1e-9)
+
+    #cumulative
+    cumulative_return = bt_df['nav'].iloc[-1] / bt_df['nav'].iloc[0] - 1
+    cumulative_sharpe = bt_df['return'].mean() / (bt_df['return'].std() + 1e-9)
+    bh_cum_return = bt_df['buy_and_hold_nav'].iloc[-1] / bt_df['buy_and_hold_nav'].iloc[0] - 1
+    bh_cum_sharpe = bt_df['bh_return'].mean() / (bt_df['bh_return'].std() + 1e-9)
+
+    # 持仓天数统计
+    if holding_days_list:
+        avg_holding = np.mean(holding_days_list)
+        min_holding = np.min(holding_days_list)
+        max_holding = np.max(holding_days_list)
+    else:
+        avg_holding = min_holding = max_holding = 0
+
+    # ===== 画图，增加止盈/止损点 =====
+    plt.figure(figsize=(12, 6))
+    plt.plot(bt_df.index, bt_df['nav'], label='Strategy NAV', color='blue')
+    plt.plot(bt_df.index, bt_df['buy_and_hold_nav'], label='Buy-and-Hold NAV', color='orange', linestyle='--')
+    plotted_long = plotted_short = plotted_exit = plotted_tp = plotted_sl = False
+
+    for idx, row in bt_df.iterrows():
+        if row['action'] == 'open_long' and not plotted_long:
+            plt.scatter(idx, row['nav'], marker='^', color='green', s=100, label='Long Entry')
+            plotted_long = True
+        elif row['action'] == 'open_long':
+            plt.scatter(idx, row['nav'], marker='^', color='green', s=100)
+        elif row['action'] == 'open_short' and not plotted_short:
+            plt.scatter(idx, row['nav'], marker='v', color='red', s=100, label='Short Entry')
+            plotted_short = True
+        elif row['action'] == 'open_short':
+            plt.scatter(idx, row['nav'], marker='v', color='red', s=100)
+        elif row['action'] in ['close_long', 'close_short'] and not plotted_exit:
+            plt.scatter(idx, row['nav'], marker='o', color='black', s=90, label='Signal Exit')
+            plotted_exit = True
+        elif row['action'] in ['close_long', 'close_short']:
+            plt.scatter(idx, row['nav'], marker='o', color='black', s=90)
+        elif 'take_profit' in row['action'] and not plotted_tp:
+            plt.scatter(idx, row['nav'], marker='*', color='gold', s=220, label='Take Profit')
+            plotted_tp = True
+        elif 'take_profit' in row['action']:
+            plt.scatter(idx, row['nav'], marker='*', color='gold', s=220)
+        elif 'stop_loss' in row['action'] and not plotted_sl:
+            plt.scatter(idx, row['nav'], marker='x', color='crimson', s=220, label='Stop Loss', linewidths=3)
+            plotted_sl = True
+        elif 'stop_loss' in row['action']:
+            plt.scatter(idx, row['nav'], marker='x', color='crimson', s=220, linewidths=3)
+
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    plt.legend(by_label.values(), by_label.keys())
+    plt.title(f'{theme} {period_label} Backtest')
+    plt.xlabel('Date')
+    plt.ylabel('NAV')
+    plt.grid(True)
+    plt.tight_layout()
+
+    save_dir = os.path.join(plot_folder, theme)
+    os.makedirs(save_dir, exist_ok=True)
+    plt.savefig(os.path.join(save_dir, f'{theme}_{period_label}_Backtest.png'))
+    plt.close()
+
+    # 返回结果行（策略与Buy-and-Hold均返回）
+    summary = []
+    summary.append({
+        'theme': theme,
+        'period': period_label,
+        'type': 'Strategy',
+        'Annualized Return': annualized_return,
+        'Sharpe': sharpe_ratio,
+        'MaxDD': max_drawdown,
+        'avg_holding_days': avg_holding,
+        'min_holding_days': min_holding,
+        'max_holding_days': max_holding,
+        'cumulative_return':  cumulative_return,
+        'cumulative_sharpe': cumulative_sharpe,
+        'days': days
+    })
+    summary.append({
+        'theme': theme,
+        'period': period_label,
+        'type': 'Buy-and-Hold',
+        'Annualized Return': bh_annualized_return,
+        'Sharpe': bh_sharpe_ratio,
+        'MaxDD': bh_max_drawdown,
+        'avg_holding_days': np.nan,
+        'min_holding_days': np.nan,
+        'max_holding_days': np.nan,
+        'cumulative_return':  bh_cum_return,
+        'cumulative_sharpe': bh_cum_sharpe,
+        'days': days
+    })
+    return pd.DataFrame(summary), bt_df
+
+# ==== 批量回测，生成结果汇总 ====
+def run_all_backtests(gold_df1, gold_df2, gold, window, open_long, open_short, close_long, close_short,tp, sl, theme):
+    results = []
+    # Train
+    df1_summary, _ = backtest_position_summary(gold_df1, window, open_long, open_short, close_long, close_short,tp, sl, theme, 'Train', plot_folder='picture_signal_tpsl')
+    if df1_summary is not None:
+        results.append(df1_summary)
+    # Test
+    df2_summary, _ = backtest_position_summary(gold_df2, window, open_long, open_short, close_long, close_short, tp, sl,theme, 'Test', plot_folder='picture_signal_tpsl')
+    if df2_summary is not None:
+        results.append(df2_summary)
+    # All
+    all_summary, _ = backtest_position_summary(gold, window, open_long, open_short, close_long, close_short, tp, sl, theme, 'All', plot_folder='picture_signal_tpsl')
+    if all_summary is not None:
+        results.append(all_summary)
+
+    if results:
+        summary_df = pd.concat(results, ignore_index=True)
+
+        # 创建保存目录
+        csv_path = os.path.join('performance_signal_tpsl', f'{theme}.csv')
+        summary_df.to_csv(csv_path, index=False)
+        return summary_df
+    
+    else:
+        return pd.DataFrame()  # 如果都没有回测数据
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import itertools
+from scipy.stats import zscore
+import pandas as pd, numpy as np, itertools, os
+from joblib import Parallel, delayed
+from scipy.stats import zscore
+
+for theme in df_clean['theme'].unique():#medium_themes:
+   
+    #theme='Gold'
+    print(theme)
+    try:
+        # # 参数网格（自行调整步长和范围）
+        # window_grid = [7, 10, 20, 30, 40, 55]
+        # open_long_grid = [0.5, 0.8, 1.0, 1.2, 1.5, 2]
+        # open_short_grid = [0.5, 0.8, 1.0, 1.2, 1.5, 2]
+        # close_long_grid = [0.5, 0.8, 1.0, 1.2, 1.5, 2]
+        # close_short_grid = [0.5, 0.8, 1.0, 1.2, 1.5, 2]
+        # 仅取Gold theme进行回测
+        gold_df_test = test_df[test_df["theme"] == theme].copy()
+        gold =gold_df_test.sort_values('date').reset_index(drop=True)
+        gold["px"] = (1 + gold["ret"]).cumprod()
+        mid = len(gold) // 2            # 整数除 2 ⇒ 前半、后半长度只差 1 行
+        gold_df1 = gold.iloc[:mid].copy()   # 前一半
+        gold_df2 = gold.iloc[mid:].copy()   # 后一半
+        gold_df2.index = range(0, len(gold_df2))
+
+
+        # ------------ ❷ 网格 ------------
+        window_grid       = [7,10,20,30,40,50, 60]
+        open_long_grid    = open_short_grid  = [0.5,0.8,1.0,1.2,1.5,2]
+        close_long_grid   = close_short_grid = [0.5,0.8,1.0,1.2,1.5,2]
+        tp_grid           = [0.5, 1,2,3,4,6,8,12,30]
+        sl_grid           = [0.5, 1,2,3,4,6,8,12,30]
+        # tp_grid           = [100]
+        # sl_grid           = [100]
+        TOP_K             = 5                # 第一阶段保留前 K 组
+
+        # ------------ ❸ 单次回测包装 ------------
+        def run_backtest(df, window, ol, os, cl, cs, tp, sl):
+            """返回 dict(sharpe, maxdd, 以及所有参数)."""
+            sharpe, maxdd = backtest_position_param(
+                gold_df=df,
+                window        = window,
+                open_long_z   = ol, open_short_z=os,
+                close_long_z  = cl, close_short_z=cs,
+                tp_z=tp, sl_z=sl
+            )
+
+            return dict(window=window, open_long_z=ol, open_short_z=os,
+                        close_long_z=cl,  close_short_z=cs,
+                        tp_z=tp, sl_z=sl,
+                        sharpe=sharpe, maxdd=maxdd)
+        # ============ ❹ 第一阶段：并行搜索 5 个参数 ============ #
+        grid_lvl1 = list(itertools.product(
+                window_grid, open_long_grid, open_short_grid,
+                close_long_grid, close_short_grid))
+        lvl1_res = Parallel(n_jobs=-1, backend="loky")(
+                delayed(run_backtest)(gold_df1, w, ol, os, cl, cs, None, None)
+                for w, ol, os, cl, cs in grid_lvl1)
+        lvl1_df = pd.DataFrame(lvl1_res)
+        lvl1_df['z_sharpe'] = zscore(lvl1_df['sharpe'])
+        lvl1_df['z_maxdd']  = zscore(lvl1_df['maxdd'].abs())
+        lvl1_df['utility']  = 0.7*lvl1_df['z_sharpe'] - 0.3*lvl1_df['z_maxdd']
+        topK = lvl1_df.nlargest(TOP_K, 'utility')
+        # ============ ❺ 第二阶段：固定 topK，再扫 tp/sl ============ #
+        lvl2_tasks = [
+            (row.window,row.open_long_z,row.open_short_z,
+            row.close_long_z,row.close_short_z,tp,sl)
+            for _,row in topK.iterrows()
+            for tp,sl in itertools.product(tp_grid, sl_grid)
+        ]
+
+        lvl2_res = Parallel(n_jobs=-1, backend="loky")(
+                delayed(run_backtest)(gold_df1, *task) for task in lvl2_tasks)
+        lvl2_df = pd.DataFrame(lvl2_res)
+        lvl2_df['z_sharpe'] = zscore(lvl2_df['sharpe'])
+        lvl2_df['z_maxdd']  = zscore(lvl2_df['maxdd'].abs())
+        lvl2_df['utility']  = 0.7*lvl2_df['z_sharpe'] - 0.3*lvl2_df['z_maxdd']
+        best_params = lvl2_df.nlargest(1, 'utility').iloc[0]
+        print("===== best param set =====")
+        print(best_params[['window','open_long_z','open_short_z',
+                        'close_long_z','close_short_z','tp_z','sl_z',
+                        'sharpe','maxdd','utility']])
+
+        #param
+        # param_grid = list(itertools.product(
+        #     window_grid, open_long_grid, open_short_grid, close_long_grid, close_short_grid
+        # ))
+        # results = []
+
+        # for params in param_grid:
+        #     window, open_long_z, open_short_z, close_long_z, close_short_z = params
+        #     sharpe, maxdd = backtest_position_param(
+        #         gold_df=gold_df1,
+        #         window=window,
+        #         open_long_z=open_long_z,
+        #         open_short_z=open_short_z,
+        #         close_long_z=close_long_z,
+        #         close_short_z=close_short_z,
+        #     )
+        #     results.append({
+        #         'window': window,
+        #         'open_long_z': open_long_z,
+        #         'open_short_z': open_short_z,
+        #         'close_long_z': close_long_z,
+        #         'close_short_z': close_short_z,
+        #         'sharpe': sharpe,
+        #         'maxdd': maxdd
+        #     })
+
+        # results_df = pd.DataFrame(results)
+
+
+
+        # # 标准化
+        # results_df['z_sharpe'] = zscore(results_df['sharpe'])
+        # results_df['z_maxdd'] = zscore(results_df['maxdd'].abs())  # 用绝对值
+
+        # # utility = 0.7*z(Sharpe) - 0.3*z(|MaxDD|)
+        # results_df['utility'] = 0.7 * results_df['z_sharpe'] - 0.3 * results_df['z_maxdd']
+
+        # # 按utility排序，取最优一组
+        # results_df = results_df.sort_values('utility', ascending=False).reset_index(drop=True)
+        # best_params = results_df.iloc[0]
+
+        # # print('======= All Results =======')
+        # # print(results_df[['window', 'open_long_z', 'open_short_z', 'close_long_z', 'close_short_z', 'sharpe', 'maxdd', 'utility']])
+
+        # print('\n======= Best Params =======')
+        # print(best_params[['window', 'open_long_z', 'open_short_z', 'close_long_z', 'close_short_z', 'sharpe', 'maxdd', 'utility']])
+
+        #result 
+        window=int(best_params['window'])
+        open_long=best_params['open_long_z']
+        open_short=best_params['open_short_z'] 
+        close_long=best_params['close_long_z']
+        close_short=best_params['close_short_z']
+
+        result_df = run_all_backtests(gold_df1, gold_df2, gold, window, open_long, open_short, close_long, close_short,tp, sl, theme)
+    
+    except Exception as e:
+        print(f"[{theme}] back-test failed as {e}") 报错[AI_PC] back-test failed as backtest_position_summary() got multiple values for argument 'plot_folder'
