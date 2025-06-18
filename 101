@@ -17,6 +17,98 @@ def get_validation_ic(features, train_data, valid_data, model_params):
     daily_ic = valid_data.groupby('date').apply(lambda x: x['pred'].corr(x['y_1d']))
     return daily_ic.mean()
 
+# --- RFE 主循环 ---
+current_features = final_features_step1.copy() # 从第一步筛选后的特征开始
+rfe_results = []
+
+# --- RFE 主循环 (修改版) ---
+# 从第一步筛选后的特征开始
+current_features = final_features_step1.copy() 
+rfe_results = []
+
+# 开始循环，每次移除一个最不重要的特征
+while len(current_features) > 10: # 假设最少保留10个特征
+    
+    # 1. 使用当前特征集，训练模型并获取验证集IC
+    val_ic = get_validation_ic(current_features, train_part, valid_part.copy(), params)
+    
+    # 2. 记录结果，包括当前的特征列表 <<< 修改点
+    rfe_results.append({
+        'num_features': len(current_features), 
+        'val_ic': val_ic,
+        'features': current_features.copy() # 必须用.copy()来存储当前状态
+    })
+    
+    print(f"特征数: {len(current_features):<3} | 验证集IC: {val_ic:.6f}")
+
+    # 3. 训练一个临时模型以获取特征重要性
+    # (这一步是为了决定下一个要移除哪个特征)
+    lgb_train_temp = lgb.Dataset(train_part[current_features], label=train_part["y_clip"])
+    temp_model = lgb.train(params, lgb_train_temp, num_boost_round=100, verbose=-1) 
+    
+    importance_df = pd.DataFrame({
+        'feature': temp_model.feature_name(),
+        'importance': temp_model.feature_importance(importance_type='gain')
+    }).sort_values('importance', ascending=True)
+
+    # 4. 移除当前最不重要的特征
+    feature_to_remove = importance_df.iloc[0]['feature']
+    current_features.remove(feature_to_remove)
+    # print(f"移除特征: {feature_to_remove}") # 可以取消注释来查看细节
+
+
+# --- 从RFE结果中找到并输出最佳特征组合 ---
+
+if not rfe_results:
+    print("RFE未能产生任何结果，请检查输入。")
+    best_features_list = []
+else:
+    # 找到验证集IC最高的那个记录
+    best_run = max(rfe_results, key=lambda x: x['val_ic'])
+    
+    # 提取那次运行的所有信息
+    best_ic = best_run['val_ic']
+    best_num = best_run['num_features']
+    best_features_list = best_run['features'] # <<< 直接提取特征列表
+
+    print("\n" + "="*50)
+    print(" RFE 特征选择完成")
+    print("="*50)
+    print(f"最佳验证集 Mean Daily IC: {best_ic:.6f}")
+    print(f"对应的最佳特征数量为: {best_num}")
+    print("\n找到的最佳特征组合如下:")
+    # 为了方便查看，每行打印几个
+    from textwrap import wrap
+    print('\n'.join(wrap(str(best_features_list), 120))) # 调整120以改变每行宽度
+
+
+
+
+
+
+
+
+
+
+# RFE的函数
+def get_validation_ic(features, train_data, valid_data, model_params):
+    """辅助函数：用给定的特征集训练模型，并返回验证集IC"""
+    lgb_train = lgb.Dataset(train_data[features], label=train_data["y_clip"])
+    lgb_valid = lgb.Dataset(valid_data[features], label=valid_data["y_clip"])
+    
+    model = lgb.train(
+        model_params,
+        lgb_train,
+        num_boost_round=500, # RFE中可以适当减少训练轮数以加速
+        valid_sets=[lgb_valid],
+        callbacks=[lgb.early_stopping(10, verbose=False)]
+    )
+    
+    # 在验证集上预测并计算IC
+    valid_data['pred'] = model.predict(valid_data[features], num_iteration=model.best_iteration)
+    daily_ic = valid_data.groupby('date').apply(lambda x: x['pred'].corr(x['y_1d']))
+    return daily_ic.mean()
+
 
 您好，我仔细审查了您提供的这部分用于计算performance和画图的代码。
 
