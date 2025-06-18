@@ -1,3 +1,151 @@
+def backtest_position_param(
+    gold_df,
+    window=30,
+    window_vola=10,
+    open_long_z=1.0,
+    open_short_z=1.0,
+    close_long_z=0.8,
+    close_short_z=0.8,
+    scale=1.0,
+    cost_bps=10,  # 手续费，基点
+    tp_z=2.0,     # 止盈倍数
+    sl_z=2.0      # 止损倍数
+):
+    import pandas as pd
+    import numpy as np
+
+    initial_capital = 1_000_000
+    nav = initial_capital
+    position = 0.0
+    cash = nav
+    holding = 0
+    records = []
+    holding_days = 0
+    holding_days_list = []
+
+    # 确保window和window_vola是整数
+    window = int(window)
+    window_vola = int(window_vola)
+    
+    start_index = max(window, window_vola)
+    # 检查DataFrame长度是否足够
+    if len(gold_df) <= start_index + 1:
+        return np.nan, np.nan, np.nan # 数据不足，无法回测
+
+    # 初始化记录
+    init_row = {
+        'date': gold_df.loc[start_index, 'date'],
+        'price': gold_df.loc[start_index, 'px'],
+        'nav': initial_capital,
+        'action': 'init'
+    }
+    records.append(init_row)
+    entry_price = None
+
+    # <<< 核心逻辑开始：与 backtest_position_summary 完全对齐 >>>
+    for i in range(start_index, len(gold_df) - 1):
+
+        # --- T日：获取决策所需信息 ---
+        decision_price = gold_df.loc[i, 'px']
+        decision_signal = gold_df.loc[i, 'pred']
+
+        signal_hist = gold_df['pred'].iloc[i-window:i].dropna()
+        if len(signal_hist) < window:
+            if holding != 0: nav = cash + position * decision_price
+            else: nav = cash
+            records.append({'date': gold_df.loc[i, 'date'], 'price': decision_price, 'nav': nav, 'action': 'hold_no_signal'})
+            continue
+
+        mean_signal = signal_hist.mean()
+        std_signal = signal_hist.std()
+        signal_z = (decision_signal - mean_signal) / (std_signal + 1e-8)
+        price_hist = gold_df['px'].iloc[i-window_vola:i+1]
+        volatility = price_hist.pct_change().std()
+        volatility = max(volatility, 0.010)
+
+        # --- T+1日：获取执行价格 ---
+        execution_price = gold_df.loc[i+1, 'px']
+        action = 'hold'
+
+        # ====== 在T日做决策 ======
+        if holding > 0:
+            holding_days += 1
+            ret = (decision_price / entry_price) - 1
+            if (tp_z is not None) and (ret >= tp_z * volatility): action = 'take_profit_long'
+            elif (sl_z is not None) and (ret <= -sl_z * volatility): action = 'stop_loss_long'
+            elif decision_signal <= mean_signal - close_long_z * std_signal: action = 'close_long'
+        elif holding < 0:
+            holding_days += 1
+            ret = 1 - (decision_price / entry_price)
+            if (tp_z is not None) and (ret >= tp_z * volatility): action = 'take_profit_short'
+            elif (sl_z is not None) and (ret <= -sl_z * volatility): action = 'stop_loss_short'
+            elif decision_signal >= mean_signal + close_short_z * std_signal: action = 'close_short'
+        elif holding == 0:
+            if decision_signal >= mean_signal + open_long_z * std_signal: action = 'open_long'
+            elif decision_signal <= mean_signal - open_short_z * std_signal: action = 'open_short'
+
+        # ====== 在T+1日用 execution_price 执行T日的决策 ======
+        if action.startswith('close') or action.startswith('take_profit') or action.startswith('stop_loss'):
+            cash += position * execution_price - abs(position * execution_price) * cost_bps / 10000
+            position = 0.0
+            holding = 0
+            holding_days_list.append(holding_days)
+            holding_days = 0
+            entry_price = None
+        elif action == 'open_long':
+            pos_ratio = np.tanh(scale * signal_z)
+            position_new = (cash / execution_price) * pos_ratio
+            fee = abs(position_new * execution_price) * cost_bps / 10000
+            cash -= position_new * execution_price + fee
+            position = position_new
+            holding = 1
+            holding_days = 1
+            entry_price = execution_price
+        elif action == 'open_short':
+            pos_ratio = np.tanh(scale * signal_z)
+            position_new = (cash / execution_price) * pos_ratio
+            fee = abs(position_new * execution_price) * cost_bps / 10000
+            cash -= position_new * execution_price + fee
+            position = position_new
+            holding = -1
+            holding_days = 1
+            entry_price = execution_price
+
+        # --- T+1日收盘后：结算并记录 ---
+        nav = cash + position * execution_price
+        records.append({
+            'date': gold_df.loc[i+1, 'date'],
+            'price': execution_price,
+            'nav': nav,
+            'action': action
+        })
+
+    # --- 循环结束后的统计 ---
+    if i == len(gold_df)-2 and holding != 0 and holding_days > 0:
+        holding_days_list.append(holding_days)
+
+    if len(records) < 2:
+        return np.nan, np.nan, np.nan
+
+    bt_df = pd.DataFrame(records).set_index('date')
+    
+    bt_df['return'] = bt_df['nav'].pct_change()
+    
+    # 检查回报率序列是否有效
+    if bt_df['return'].std() == 0 or len(bt_df['return'].dropna()) < 2:
+        sharpe_ratio = 0.0
+    else:
+        sharpe_ratio = np.sqrt(252) * bt_df['return'].mean() / bt_df['return'].std()
+
+    bt_df['nav_peak'] = bt_df['nav'].cummax()
+    bt_df['drawdown'] = bt_df['nav'] / bt_df['nav_peak'] - 1
+    max_drawdown = bt_df['drawdown'].min()
+    
+    avg_holding = np.mean(holding_days_list) if holding_days_list else 0
+
+    return sharpe_ratio, max_drawdown, avg_holding
+
+
 # RFE的函数
 def get_validation_ic(features, train_data, valid_data, model_params):
     """辅助函数：用给定的特征集训练模型，并返回验证集IC"""
