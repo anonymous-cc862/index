@@ -1,3 +1,23 @@
+# RFE的函数
+def get_validation_ic(features, train_data, valid_data, model_params):
+    """辅助函数：用给定的特征集训练模型，并返回验证集IC"""
+    lgb_train = lgb.Dataset(train_data[features], label=train_data["y_clip"])
+    lgb_valid = lgb.Dataset(valid_data[features], label=valid_data["y_clip"])
+    
+    model = lgb.train(
+        model_params,
+        lgb_train,
+        num_boost_round=500, # RFE中可以适当减少训练轮数以加速
+        valid_sets=[lgb_valid],
+        callbacks=[lgb.early_stopping(10, verbose=False)]
+    )
+    
+    # 在验证集上预测并计算IC
+    valid_data['pred'] = model.predict(valid_data[features], num_iteration=model.best_iteration)
+    daily_ic = valid_data.groupby('date').apply(lambda x: x['pred'].corr(x['y_1d']))
+    return daily_ic.mean()
+
+
 您好，我仔细审查了您提供的这部分用于计算performance和画图的代码。
 
 结论是：**您的这部分代码逻辑是正确的，几乎不需要修改**。它已经能够很好地兼容我们刚刚确立的“T日决策，T+1日执行”的回测框架。
