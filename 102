@@ -1,0 +1,281 @@
+import pandas as pd
+import numpy as np
+from itertools import product
+from joblib import Parallel, delayed
+from tqdm import tqdm
+from scipy.stats import zscore
+import os
+import glob
+
+# Assume EnhancedTimingStrategy class is defined here or imported
+# from strategy_definition import EnhancedTimingStrategy, get_holding_days
+
+# ────────────── HELPER: PERFORMANCE CALCULATION ──────────────
+
+def calculate_performance_metrics(returns_series, periods_per_year=252):
+    """
+    Calculates key performance metrics for a given returns series.
+    """
+    if returns_series.empty or returns_series.sum() == 0:
+        return 0, 0, 0, 0
+
+    total_return = (1 + returns_series).prod()
+    num_days = len(returns_series)
+    annualized_return = total_return ** (periods_per_year / num_days) - 1
+
+    annualized_vol = returns_series.std() * np.sqrt(periods_per_year)
+    sharpe_ratio = annualized_return / annualized_vol if annualized_vol != 0 else 0
+
+    # Calculate Max Drawdown
+    cum_returns = (1 + returns_series).cumprod()
+    peak = cum_returns.expanding(min_periods=1).max()
+    drawdown = (cum_returns - peak) / peak
+    max_drawdown = drawdown.min()
+
+    # Calculate Rolling5_MaxDD (Average of 5 largest drawdowns)
+    drawdown_periods = []
+    is_in_drawdown = False
+    for date, val in drawdown.items():
+        if val < 0 and not is_in_drawdown:
+            is_in_drawdown = True
+            start_date = date
+        elif val == 0 and is_in_drawdown:
+            is_in_drawdown = False
+            end_date = date
+            min_drawdown_in_period = drawdown.loc[start_date:end_date].min()
+            drawdown_periods.append(min_drawdown_in_period)
+    
+    if is_in_drawdown: # handle drawdown at the end of the series
+        min_drawdown_in_period = drawdown.loc[start_date:].min()
+        drawdown_periods.append(min_drawdown_in_period)
+
+    largest_drawdowns = sorted(drawdown_periods)[:5] # Get the 5 smallest (most negative) values
+    rolling5_maxdd = np.mean(largest_drawdowns) if largest_drawdowns else 0
+
+
+    return annualized_return, sharpe_ratio, max_drawdown, rolling5_maxdd
+
+
+# ────────────── MAIN PROCESSING FUNCTION ──────────────
+
+def process_asset_file(file_path):
+    """
+    Main function to run the entire backtesting pipeline for a single asset file.
+    """
+    try:
+        theme = os.path.basename(file_path).split('_')[0]
+        print(f"\n{'='*20} Processing Theme: {theme} {'='*20}")
+
+        # ────────────── 1. Data Preparation ──────────────
+        df = pd.read_csv(file_path)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df[~((df["date"].dt.weekday >= 5) & (df["weighted_return_2"] == 0))]
+        daily_rets = df.set_index("date")["weighted_return_2"].sort_index()
+        
+        # Ensure there is data to process
+        if daily_rets.empty:
+            print(f"Skipping {theme}: No data after filtering.")
+            return
+
+        train_end = pd.Timestamp("2024-07-01")
+        in_sample = daily_rets.loc[: train_end - pd.Timedelta(days=1)]
+        out_sample = daily_rets.loc[train_end:]
+        
+        if in_sample.empty or out_sample.empty:
+            print(f"Skipping {theme}: Not enough data for train/test split.")
+            return
+
+        # ────────────── 2. Grid Search Parameters ──────────────
+        signal_grid = {
+            "pct_window": [10, 30],
+            "rsi_lookback": [5],
+            "RSI_pct_low": [0.1, 0.2, 0.3],
+            "RSI_pct_high": [0.9, 0.8, 0.7],
+            "EMA100_slope_pct_high": [0.9, 0.8, 0.7],
+            "EMA100_slope_pct_low": [0.3, 0.2, 0.1],
+            "base_risk": [0.1, 0.2, 0.3],
+        }
+        stoploss_grid = [300, 400]
+        takeprofit_grid = [300]
+        sig_names = list(signal_grid.keys())
+        sig_vals = list(signal_grid.values())
+        signal_combos = list(product(*sig_vals))
+
+        # ────────────── 3. First Round: Signal Parameter Search ──────────────
+        print(f"Round 1 Parallel Search: {len(signal_combos)} combinations for {theme}")
+        sig_res = Parallel(-1, backend="loky")(
+            delayed(eval_signal)(c, in_sample, sig_names) for c in tqdm(signal_combos)
+        )
+        sig_clean = [r for r in sig_res if r]
+        if not sig_clean:
+            raise RuntimeError(f"Round 1 failed for {theme}, no results!")
+        
+        sig_df = pd.DataFrame(sig_clean)
+        sig_df["utility"] = (0.9 * zscore(sig_df["sharpe"]) - 0.1 * zscore(sig_df["maxdd"].abs()))
+        top12 = sig_df.nlargest(12, "utility").to_dict("records")
+        
+        # ────────────── 4. Second Round: Stop-Loss / Take-Profit Search ──────────────
+        tasks = [(p, sl, tp) for p in top12 for sl in stoploss_grid for tp in takeprofit_grid]
+        print(f"Round 2 Parallel Search: {len(tasks)} combinations for {theme}")
+        stop_res = Parallel(-1, backend="loky")(
+            delayed(eval_stoploss)(p, sl, tp, in_sample, sig_names) for p, sl, tp in tqdm(tasks)
+        )
+        stop_clean = [r for r in stop_res if r]
+        if not stop_clean:
+            raise RuntimeError(f"Round 2 failed for {theme}, no results!")
+
+        stop_df = pd.DataFrame(stop_clean)
+        stop_df["utility"] = (0.9 * zscore(stop_df["sharpe"]) - 0.1 * zscore(stop_df["maxdd"].abs()))
+        best = stop_df.loc[stop_df["utility"].idxmax()]
+
+        # ────────────── 5. Output Generation ──────────────
+        # Create directories
+        picture_folder = os.path.join("picture_signal1", theme)
+        os.makedirs(picture_folder, exist_ok=True)
+        os.makedirs("performance_signal1", exist_ok=True)
+
+        results_list = []
+
+        # --- Train Set Evaluation ---
+        print(f"\n===== Evaluating best parameters on IN-SAMPLE for {theme} =====")
+        strat_train = EnhancedTimingStrategy(in_sample)
+        set_params(strat_train, best, fix_tp_sl=False)
+        strat_train.calc_indicators()
+        strat_train.generate_signals1()
+        strat_train.backtest1()
+        train_plot_path = os.path.join(picture_folder, f"{theme}_Train_Backtest.png")
+        ann_train, shp_train, mdd_train, _, results_df_train = strat_train.performance(plot_trades=True, save_path=train_plot_path)
+        
+        # Get holding days stats from strategy results
+        h_days_info = get_holding_days(results_df_train)
+        
+        # Calculate strategy metrics
+        _, _, _, r5_mdd_train = calculate_performance_metrics(results_df_train["ret"])
+
+        results_list.append({
+            "theme": theme, "period": "Train", "type": "Strategy",
+            "Annualized Return": ann_train, "Sharpe": shp_train, "MaxDD": mdd_train,
+            "Rolling5_MaxDD": r5_mdd_train, "avg_holding_days": h_days_info['avg'],
+            "min_holding_days": h_days_info['min'], "max_holding_days": h_days_info['max']
+        })
+
+        # Calculate Buy-and-Hold metrics for Train set
+        ann_bh_train, shp_bh_train, mdd_bh_train, r5_mdd_bh_train = calculate_performance_metrics(in_sample)
+        results_list.append({
+            "theme": theme, "period": "Train", "type": "Buy-and-Hold",
+            "Annualized Return": ann_bh_train, "Sharpe": shp_bh_train, "MaxDD": mdd_bh_train,
+            "Rolling5_MaxDD": r5_mdd_bh_train, "avg_holding_days": len(in_sample),
+            "min_holding_days": len(in_sample), "max_holding_days": len(in_sample)
+        })
+
+        # --- Test Set Evaluation ---
+        print(f"\n===== Evaluating best parameters on OUT-OF-SAMPLE for {theme} =====")
+        strat_test = EnhancedTimingStrategy(out_sample)
+        set_params(strat_test, best, fix_tp_sl=False)
+        strat_test.calc_indicators()
+        strat_test.generate_signals1()
+        strat_test.backtest1()
+        test_plot_path = os.path.join(picture_folder, f"{theme}_Test_Backtest.png")
+        ann_test, shp_test, mdd_test, _, results_df_test = strat_test.performance(plot_trades=True, save_path=test_plot_path)
+
+        # Get holding days stats
+        h_days_info_test = get_holding_days(results_df_test)
+        
+        # Calculate strategy metrics
+        _, _, _, r5_mdd_test = calculate_performance_metrics(results_df_test["ret"])
+
+        results_list.append({
+            "theme": theme, "period": "Test", "type": "Strategy",
+            "Annualized Return": ann_test, "Sharpe": shp_test, "MaxDD": mdd_test,
+            "Rolling5_MaxDD": r5_mdd_test, "avg_holding_days": h_days_info_test['avg'],
+            "min_holding_days": h_days_info_test['min'], "max_holding_days": h_days_info_test['max']
+        })
+
+        # Calculate Buy-and-Hold metrics for Test set
+        ann_bh_test, shp_bh_test, mdd_bh_test, r5_mdd_bh_test = calculate_performance_metrics(out_sample)
+        results_list.append({
+            "theme": theme, "period": "Test", "type": "Buy-and-Hold",
+            "Annualized Return": ann_bh_test, "Sharpe": shp_bh_test, "MaxDD": mdd_bh_test,
+            "Rolling5_MaxDD": r5_mdd_bh_test, "avg_holding_days": len(out_sample),
+            "min_holding_days": len(out_sample), "max_holding_days": len(out_sample)
+        })
+
+        # --- Save performance data to CSV ---
+        performance_df = pd.DataFrame(results_list)
+        performance_csv_path = os.path.join("performance_signal1", f"{theme}.csv")
+        performance_df.to_csv(performance_csv_path, index=False)
+        print(f"\nPerformance data for {theme} saved to {performance_csv_path}")
+
+    except Exception as e:
+        print(f"An error occurred while processing {file_path}: {e}")
+
+# ────────────── UTILITY FUNCTIONS (Modified for pipeline) ──────────────
+
+def set_params(strat, p, fix_tp_sl=True):
+    for k, v in p.items():
+        if k in {"pct_window", "rsi_lookback"}:
+            v = int(v) if v is not None else 1
+            v = max(v, 1)
+        setattr(strat, k, v)
+    if fix_tp_sl:
+        strat.stoploss_atr = 100
+        strat.takeprofit_atr = 100
+
+def get_holding_days(results):
+    if "pos" not in results.columns:
+        return {'avg': 0, 'min': 0, 'max': 0}
+    trades, pos, entry_date = [], 0, None
+    for dt, row in results.iterrows():
+        if pos == 0 and row["pos"] != 0:
+            pos, entry_date = row["pos"], dt
+        elif pos != 0 and row["pos"] == 0:
+            trades.append((dt - entry_date).days)
+            pos = 0
+    if trades:
+        return {'avg': np.mean(trades), 'min': np.min(trades), 'max': np.max(trades)}
+    return {'avg': 0, 'min': 0, 'max': 0}
+
+
+def eval_signal(combo, in_sample_data, sig_names):
+    p = dict(zip(sig_names, combo))
+    strat = EnhancedTimingStrategy(in_sample_data)
+    set_params(strat, p, fix_tp_sl=True)
+    try:
+        strat.calc_indicators()
+        strat.generate_signals1()
+        strat.backtest1()
+        ann, shp, mdd, _, _ = strat.performance(plot_trades=False)
+        return {**p, "sharpe": shp, "maxdd": mdd}
+    except Exception:
+        return None
+
+def eval_stoploss(base_p, sl, tp, in_sample_data, sig_names):
+    p = {**base_p, "stoploss_atr": sl, "takeprofit_atr": tp}
+    strat = EnhancedTimingStrategy(in_sample_data)
+    set_params(strat, p, fix_tp_sl=False)
+    try:
+        strat.calc_indicators()
+        strat.generate_signals1()
+        strat.backtest1()
+        ann, shp, mdd, _, _ = strat.performance(plot_trades=False)
+        return {**p, "sharpe": shp, "maxdd": mdd}
+    except Exception:
+        return None
+
+# ────────────── SCRIPT ENTRY POINT ──────────────
+
+if __name__ == "__main__":
+    # Define the directory containing the asset files
+    input_directory = "weighted_return"
+    
+    # Find all CSV files in the directory
+    all_files = glob.glob(os.path.join(input_directory, "*.csv"))
+    
+    if not all_files:
+        print(f"No CSV files found in directory: {input_directory}")
+    else:
+        print(f"Found {len(all_files)} files to process.")
+        for file_path in all_files:
+            process_asset_file(file_path)
+    
+    print("\nAll files processed.")
