@@ -1,3 +1,98 @@
+你目前的情况如下：
+
+* Miniconda 已经装在 `C:\devhome\tools\miniconda\current`
+* 打开 VSCode，终端默认是 powershell（无 conda 环境）
+* 想要在 VSCode 用 conda 环境，能切换解释器、能运行 Jupyter 笔记本
+
+---
+
+## **详细一步步帮你搞定 VSCode + conda**
+
+---
+
+### **1. 设置 VSCode 终端每次自动激活 conda (base)**
+
+让 VSCode 终端直接用 CMD 并激活 conda，最方便！
+
+#### **A. 设置 shellArgs 自动激活**
+
+1. 打开 VSCode 设置，搜索 `terminal.integrated.shellArgs.windows`
+2. 找到设置界面右上角 `{}` 打开 `settings.json`
+3. 加上下面这一行（如果已有就修改）：
+
+```json
+"terminal.integrated.shellArgs.windows": ["/k", "C:\\devhome\\tools\\miniconda\\current\\Scripts\\activate.bat"]
+```
+
+> 注意 `\\` 不能写成 `/`
+
+4. 保存，**重启 VSCode**
+
+5. 新开 VSCode 终端，应该前面会出现 `(base)`，并且是 CMD（不是 powershell）
+   如果还是 powershell，搜索 `terminal.integrated.defaultProfile.windows`，改成
+
+   ```json
+   "terminal.integrated.defaultProfile.windows": "Command Prompt"
+   ```
+
+---
+
+### **2. VSCode 里用 conda 管理和切换环境**
+
+* 新建/激活环境：
+
+  ```cmd
+  conda create -n myenv python=3.10
+  conda activate myenv
+  ```
+
+---
+
+### **3. 让 Jupyter 能切换到你的 conda 环境**
+
+1. 激活你要用的环境（在终端里）：
+
+   ```cmd
+   conda activate myenv
+   ```
+2. 安装 ipykernel（解决 kernel 切换问题）：
+
+   ```cmd
+   conda install ipykernel
+   python -m ipykernel install --user --name myenv --display-name "Python (myenv)"
+   ```
+3. 回到 VSCode 的 notebook，`Select Kernel` 里应该能选到 “Python (myenv)”。
+
+---
+
+### **4. VSCode 选择 Python 解释器（推荐）**
+
+1. 任何 Python 文件/Notebook，左下角点 Python 环境
+2. 选择 `C:\devhome\tools\miniconda\current\envs\myenv\python.exe`
+
+---
+
+## **常见问题答疑**
+
+* **不用在 VSCode 安装 Miniconda**，只要指定 conda 的 python 路径、终端能自动激活 conda 环境即可。
+* 每个新环境都要在环境下 `conda install ipykernel && python -m ipykernel install ...` 才能用 Jupyter 切换内核。
+
+---
+
+## **一张图说明全部流程**
+
+1. VSCode 终端自动激活 conda (base)
+2. 新建 conda 环境 → 激活
+3. 安装 ipykernel → 注册 kernel
+4. VSCode Jupyter “Select Kernel” 里选到环境
+
+---
+
+**你只要按照上面操作走一遍，VSCode 就能愉快用 conda 环境做 Jupyter/Python 开发了！**
+
+遇到任何卡点，把你的 settings.json 和具体报错发出来，帮你精细调整～
+
+
 你现在遇到的情况总结如下：
 
 1. 你**已经能在 VSCode 终端用 conda 新建环境**，如 `project1`，并能用 `conda activate project1` 进入。
