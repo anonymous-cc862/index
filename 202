@@ -1,3 +1,72 @@
+你遇到的 `error while fetching`，在用 VSCode extension marketplace 安装 Jupyter 扩展时，99% 是\*\*网络连不上官方扩展市场（marketplace.visualstudio.com）\*\*导致的。这是中国大陆/部分香港/部分公司内网下的典型现象，和 devcli 没太大关系，**跟“网络墙”或者网络代理限制强相关**。
+
+---
+
+## 解决思路
+
+### 1. **离线手动安装 Jupyter 扩展（推荐）**
+
+#### **步骤：**
+
+1. 在有正常网络的电脑（或能科学上网的环境）访问：
+   [https://marketplace.visualstudio.com/items?itemName=ms-toolsai.jupyter](https://marketplace.visualstudio.com/items?itemName=ms-toolsai.jupyter)
+2. 右侧有 **Download Extension**，下载 `.vsix` 文件。
+3. 把这个 `.vsix` 文件拷贝到你 devcli 的机器上。
+4. VSCode 里 `Ctrl+Shift+P` 输入：
+
+   ```
+   Extensions: Install from VSIX...
+   ```
+
+   选择刚才下载的 `.vsix` 文件。
+5. 安装后重启 VSCode 即可！
+
+---
+
+### 2. **切换到 Open VSX 源（可选）**
+
+有些 VSCode 派生版（如 VSCodium）可以直接配置 [open-vsx.org](https://open-vsx.org/) 作为扩展市场。
+但官方 VSCode 默认是不支持的。如果你用的不是官方 VSCode，可以试试：
+
+* `https://open-vsx.org/extension/ms-toolsai/jupyter`
+  也可以下载 `.vsix` 手动装。
+
+---
+
+### 3. **配置网络代理（如有公司VPN/梯子）**
+
+如果你有科学上网手段或代理（如 HTTP/HTTPS/SOCKS5），可以在 VSCode 设置里配置代理：
+
+* 打开 VSCode 设置，搜索 `proxy`
+* 设置如
+
+  ```
+  http://127.0.0.1:7890
+  ```
+
+  或你的代理服务器端口
+
+---
+
+### 4. **考虑让 IT 帮你在 devcli 镜像/市场安装 Jupyter**
+
+公司或学校封装的 devcli，如果是批量管理的，有时得让 IT 统一加扩展。
+
+---
+
+## 总结
+
+**你这种网络导致的 fetching error，最省事的解决法就是：**
+
+* 在别的地方下好 `.vsix`，本地离线安装。
+* 没有合适代理环境时，不建议死磕在线市场。
+
+---
+
+需要 `.vsix` 下载直链、或者遇到离线安装报错，可以继续贴报错内容，我再帮你排查！
+
+
+
 很好！现在你的 VSCode 终端已经自动激活 `(base)` 了，conda 可以正常用了。
 
 ---
