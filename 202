@@ -1,3 +1,64 @@
+
+非常好！你测试的这句
+
+```cmd
+cmd /k C:\devhome\tools\miniconda\current\Scripts\activate.bat
+```
+
+**能够让 VSCode 终端自动进入 base 环境**，说明一切正常！
+
+---
+
+## **让 VSCode 每次新终端都自动激活 base 环境**
+
+### 方案一：【最推荐】VSCode 配置终端启动参数
+
+1. 打开 VSCode 设置（快捷键 `Ctrl+,`）。
+2. 搜索 `terminal.integrated.shellArgs.windows`
+3. 右上角点“在 settings.json 中编辑”（打开 `settings.json`）。
+4. 在设置里**加上这行**：
+
+   ```json
+   "terminal.integrated.shellArgs.windows": ["/k", "C:\\devhome\\tools\\miniconda\\current\\Scripts\\activate.bat"]
+   ```
+
+   （注意所有 `\` 都要写成双斜杠 `\\`，否则可能会报错）
+
+**完整例子：**
+
+```json
+{
+  // 你原来的其他设置...
+  "terminal.integrated.shellArgs.windows": ["/k", "C:\\devhome\\tools\\miniconda\\current\\Scripts\\activate.bat"]
+}
+```
+
+保存后，**关闭所有 VSCode 终端，再新开一个**，每次都会自动进入 base 环境！
+
+---
+
+### 方案二：【仅临时/备用】每次打开都手动用那句命令
+
+不推荐，容易忘掉，建议还是改 VSCode 设置。
+
+---
+
+### 方案三：【直接用 devcli shell（如有）】
+
+如果 devcli 有 shell 自动激活 conda，可以直接用 `dev shell miniconda` 或类似命令打开带 conda 的终端，再在 VSCode 选择该终端类型。
+
+---
+
+## **小结**
+
+* **最优解：VSCode `settings.json` 里加 shellArgs，自动激活 base**
+* 打开 VSCode 新终端时就会自动有 `(base)`，conda 命令也能直接用
+
+---
+
+如你设置后还有问题，把 `settings.json` 贴出来我帮你检查！
+
+
 你的描述是：
 
 * VSCode 终端显示路径是 `C:\users>`
