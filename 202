@@ -1,3 +1,82 @@
+你现在遇到的情况总结如下：
+
+1. 你**已经能在 VSCode 终端用 conda 新建环境**，如 `project1`，并能用 `conda activate project1` 进入。
+2. 但是**在 Jupyter 笔记本里 `Select Kernel` 选项，并没有出现 `project1` 环境**。
+
+---
+
+## 这是典型的 **conda 新环境没有自动注册 Jupyter kernel** 的问题。
+
+### 根本原因
+
+> 新建的 conda 环境，默认**不会自动注册为 Jupyter kernel**，除非你手动安装 ipykernel 并注册。
+
+---
+
+## 解决办法（两步走，100%有效）
+
+### 1. **激活你的 conda 环境**（比如 `project1`）
+
+在 VSCode 终端里，确保是 `(project1)` 环境下，输入：
+
+```bash
+conda activate project1
+```
+
+---
+
+### 2. **在该环境下安装 ipykernel 并注册为 kernel**
+
+在已激活的环境下执行：
+
+```bash
+pip install ipykernel
+python -m ipykernel install --user --name project1 --display-name "Python (project1)"
+```
+
+* `--name project1`：内核的唯一名称
+* `--display-name "Python (project1)"`：你在 Jupyter 里看到的友好名称（可以自定义）
+
+---
+
+### 3. **刷新 VSCode Jupyter kernel 列表**
+
+* 回到 VSCode 的 Jupyter notebook，点 "Select Kernel"
+* 现在应该能看到 "Python (project1)" 内核了，选择它即可。
+
+---
+
+## 之后每新建一个 conda 环境，都要在该环境下：
+
+```bash
+pip install ipykernel
+python -m ipykernel install --user --name 你的环境名 --display-name "Python (你的环境名)"
+```
+
+这样就能一直用 VSCode 的 Jupyter 笔记本切换内核。
+
+---
+
+## 你遇到的 warning（关于 conda channel defaults）不是大问题，只是建议你加个 channel，用下面命令一次性解决（选做）：
+
+```bash
+conda config --add channels defaults
+```
+
+这个 warning 跟 Jupyter kernel 没有关系。
+
+---
+
+## 总结一句话
+
+> 只要新环境 `pip install ipykernel && python -m ipykernel install`，VSCode Jupyter 一定能用新环境！
+
+---
+
+有任何后续问题可以直接发 notebook 选择内核界面的截图，或者新 kernel 还是没显示，我可以帮你进一步排查！
+
+
+
 你遇到的 `error while fetching`，在用 VSCode extension marketplace 安装 Jupyter 扩展时，99% 是\*\*网络连不上官方扩展市场（marketplace.visualstudio.com）\*\*导致的。这是中国大陆/部分香港/部分公司内网下的典型现象，和 devcli 没太大关系，**跟“网络墙”或者网络代理限制强相关**。
 
 ---
