@@ -1,3 +1,83 @@
+很好！现在你的 VSCode 终端已经自动激活 `(base)` 了，conda 可以正常用了。
+
+---
+
+## 新建一个 conda 环境的命令
+
+假如你要新建一个叫 `myenv` 的环境，并且想要 Python 3.10，可以直接在终端输入：
+
+```bash
+conda create -n myenv python=3.10
+```
+
+* `-n myenv` 指定环境名称为 `myenv`
+* `python=3.10` 指定 Python 版本（可以改为 3.9、3.8 等）
+
+---
+
+## 创建过程说明
+
+* 运行上述命令后，会下载并安装 Python 和默认依赖包。
+* 中间会提示 `[y/n]`，输入 `y` 回车继续。
+* 完成后会有类似
+
+  ```
+  #
+  # To activate this environment, use
+  #
+  #     $ conda activate myenv
+  #
+  # To deactivate an active environment, use
+  #
+  #     $ conda deactivate
+  #
+  ```
+
+---
+
+## 激活/切换环境
+
+* 激活你新建的环境：
+
+  ```bash
+  conda activate myenv
+  ```
+* 返回 base 环境：
+
+  ```bash
+  conda deactivate
+  ```
+
+---
+
+## 安装其他包（举例）
+
+激活环境后可以直接安装你需要的包，比如：
+
+```bash
+conda install numpy pandas matplotlib
+```
+
+或者
+
+```bash
+pip install 包名
+```
+
+（一般优先用 conda 装常用科学包）
+
+---
+
+## 在 VSCode 选择你的 conda 环境
+
+1. 在 VSCode 左下角 Python 版本号处点一下
+2. 选择 `myenv` 环境下的 python 路径（一般是
+   `C:\devhome\tools\miniconda\current\envs\myenv\python.exe`）
+3. 这样 VSCode 的 Python 解释器就和你的 conda 环境同步了。
+
+---
+
+有问题可以随时问！
 
 非常好！你测试的这句
 
