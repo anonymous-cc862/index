@@ -1,0 +1,106 @@
+你的描述是：
+
+* VSCode 终端显示路径是 `C:\users>`
+* 输入
+
+  ```
+  C:\devhome\tools\miniconda\current\Scripts\activate.bat
+  ```
+
+  **没有出现 `(base)`，也没有提示 conda 激活成功**，什么都没变。
+
+---
+
+## 常见原因和排查思路
+
+### 1. **激活脚本被修改/损坏**
+
+有时候 bat 文件损坏或被删，运行没反应。
+
+### 2. **VSCode 启动了最“干净”的 cmd**
+
+有的 VSCode 发行包或者 devcli 环境，终端起得特别干净，甚至一些变量都没带上。
+
+### 3. **激活命令有误**
+
+路径错或者 bat 没有执行权限，都会这样。
+
+---
+
+## 你可以这样排查：
+
+### **A. 检查 bat 文件是否存在**
+
+在 VSCode 终端输入：
+
+```cmd
+dir C:\devhome\tools\miniconda\current\Scripts\activate.bat
+```
+
+如果显示找不到文件，说明路径错了，检查 devcli 的 conda 安装路径。
+
+---
+
+### **B. 手动激活 base 环境并观察反馈**
+
+在终端输入：
+
+```cmd
+C:\devhome\tools\miniconda\current\Scripts\activate.bat base
+```
+
+或者
+
+```cmd
+call C:\devhome\tools\miniconda\current\Scripts\activate.bat
+```
+
+看下有没有输出任何提示。
+
+---
+
+### **C. 检查 activate.bat 文件内容**
+
+用记事本或 VSCode 打开
+`C:\devhome\tools\miniconda\current\Scripts\activate.bat`
+看看里面是不是一个正常的 bat 文件。
+
+---
+
+### **D. 尝试 cmd 原生命令激活**
+
+在 VSCode 终端输入：
+
+```cmd
+cmd /k C:\devhome\tools\miniconda\current\Scripts\activate.bat
+```
+
+这会启动一个新 cmd，并运行激活脚本。
+
+---
+
+### **E. 检查 devcli 是否有自己的激活命令**
+
+有些 devcli 环境是用自己的 "shell" 机制，
+你可以查一下文档，看看有没有 `dev shell conda` 或
+`dev shell miniconda` 之类命令，把你带入带 conda 的 shell 环境。
+
+---
+
+### **F. 彻底重启 VSCode 和电脑**
+
+有些 PATH 变动或环境更新，需要完全关闭 VSCode 再打开才会生效。必要时重启电脑。
+
+---
+
+## 总结
+
+* **先确认 activate.bat 是否存在**
+  `dir C:\devhome\tools\miniconda\current\Scripts\activate.bat`
+* **直接调用 bat 文件加 `base`**
+  `C:\devhome\tools\miniconda\current\Scripts\activate.bat base`
+* **仍然无效？贴出 bat 文件内容和终端完整截图，我帮你深度排查！**
+
+---
+
+可以按顺序试一下，遇到新问题直接贴输出！
