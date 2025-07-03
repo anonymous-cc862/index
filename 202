@@ -1,3 +1,49 @@
+没关系！你可以**手动编辑 VSCode 的 `settings.json` 文件**，这样最直接、最通用。
+
+---
+
+## **手动编辑 settings.json 的方法：**
+
+1. **打开命令面板：**
+   按 `Ctrl + Shift + P`
+   输入并选择 `Preferences: Open Settings (JSON)`
+   （如果你是中文界面，就是“打开设置（JSON）”）
+
+2. **在打开的 `settings.json` 里添加如下内容：**
+
+   ```json
+   {
+     // ...（你的其他设置，如果有）
+     "terminal.integrated.defaultProfile.windows": "Command Prompt",
+     "terminal.integrated.shellArgs.windows": [
+         "/k",
+         "C:\\devhome\\tools\\miniconda\\current\\Scripts\\activate.bat"
+     ]
+   }
+   ```
+
+   > ⚠️ 注意斜杠要写成 `\\`。
+
+3. **保存并重启 VSCode。**
+
+---
+
+### **效果验证：**
+
+* 打开新终端（Terminal），应该自动进入 `(base)`，并且是 `cmd`（不是 powershell）。
+
+---
+
+### **如果还有问题：**
+
+* 检查是否有权限保存 `settings.json`。
+* 确保路径和配置没有拼写错误。
+
+---
+
+**搞不定可以截图你的 `settings.json` 或直接贴出来，我帮你改！**
+
+
 你目前的情况如下：
 
 * Miniconda 已经装在 `C:\devhome\tools\miniconda\current`
