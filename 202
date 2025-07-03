@@ -1,3 +1,58 @@
+
+你的 `settings.json` 配置格式**不正确**，导致设置没有生效！
+
+---
+
+## **正确的 `settings.json` 结构**
+
+所有配置项都要**放在一对大括号 `{}` 内，并用逗号隔开**。
+你的代码目前少了逗号和格式。
+
+请参考下面**修正后的版本**（直接复制替换掉你现在的内容即可）：
+
+```json
+{
+  "terminal.integrated.defaultProfile.windows": "Command Prompt",
+  "terminal.integrated.shellArgs.windows": [
+    "/k",
+    "C:\\devhome\\tools\\miniconda\\current\\Scripts\\activate.bat"
+  ]
+}
+```
+
+---
+
+## **操作步骤**
+
+1. 用上面代码**完整替换你现在的 settings.json 内容**。
+2. **保存**（`Ctrl+S`）。
+3. **彻底关闭 VSCode 后重启**。
+4. 在 VSCode 里点 Terminal 新建终端，
+
+   * 提示符应该变成
+
+     ```
+     (base) C:\Users\...
+     ```
+   * 且终端类型会是 `cmd` 而不是 `powershell`。
+
+---
+
+## **如还是 powershell**
+
+* 搜索 VSCode 设置 `"terminal.integrated.defaultProfile.windows"`，确认是 "Command Prompt"。
+* 还不行，可以手动点 VSCode 终端的下拉菜单，切换成 `cmd`（Command Prompt）。
+
+---
+
+## **最终效果**
+
+你的 VSCode 新终端会自动进入 `(base)`，可以直接用 `conda activate xxx`，python、pip 等都在 conda 环境下！
+
+---
+
+如还有问题，请直接**截图 VSCode 新终端的提示符**，或者贴一下完整 settings.json，我继续帮你调整！
+
 没关系！你可以**手动编辑 VSCode 的 `settings.json` 文件**，这样最直接、最通用。
 
 ---
