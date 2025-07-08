@@ -1,0 +1,241 @@
+﻿20250708_101206
+说话人1 00:12
+So I think for those rolling, maybe anyway, first of all, nasa in 2 months or 1 months, 2 months ago. And I want to trades me personality. So I was asking if you have been introduced to people.
+说话人2 01:19
+absolutely to get access to the right. So you do that and that once you do it, because we need to ask sk for approval, ii would think is secretary ok I don't know how much have the guys give you background, what we do.
+说话人3 01:36
+I learned some like the business in our team from treating and she and oliver. And like, firstly, one we want to our main task is to do the short and long block brokerage from our client, like do some prediction for the stability? Okay?
+说话人2 02:04
+We don't call it prediction, we call it modeling.
+说话人3 02:07
+important.
+说话人2 02:09
+It's a big difference once you start talking to business.
+
+Okay?
+说话人3 02:13
+The other portion is the like delta one business, like we want to force forced along some stock.
+
+And then maybe I think we can do some like alpha of our investment based on this to like this position and stocks.
+说话人2 02:50
+So the just I will start from the scratch, right? Some of them we have covered when we're interviewing you, but whatever, right? So the main focus is on china. So basically, everything I say you can think of.
+说话人1 03:09
+in china from china perspective.
+说话人2 03:11
+Right? So there are from delta one trading perspective.
+说话人1 03:18
+Right? So can I.
+说话人2 03:22
+the because in china, you cannot short. Yeah, that's right. So you have to have physical stock in order to sell it. Now, let's say some company, right? I don't know. Did you see our client list already or you didn't have chance? Let's say some company wants to do this long, short strategies, right? What is non stop? I know. So the way they can do it, it's called box trade. What they do is they come to us.
+
+Now, let's say this is raining, right? The renaissance. Yeah. They come to us and they say we want this portfolio, which is like 4,000 stocks. Right? And then they give us the delta's how much they want. And they want to buy and sell this this part from this portfolio. Right now, what we do is this is raining right now. This is the taiwan desk. We buy all these talks. We go to the market and buy them, right? And then we give it to running. Yeah. Are you familiar with this? As I wanna explain to.
+说话人3 04:36
+you? I think i'm familiar because we want to reduce the recall. So we have.
+说话人2 04:44
+forget about recall. This is not about recordings from delta one perspective, because delta one has a portfolio that needs to hedge. I'm basically explaining where this portfolio comes.
+说话人3 04:56
+Okay?
+说话人2 04:57
+Then we buy these talks, we give it to running.
+
+Now, running has all these physical stocks, right? And then they do a contract with us, cfd contract, exactly the same portfolio. So they are long stocks, short, this contract. So they have zero risk, right? Let's say, stock one. They are, let's say, 1 million stock and 1 million short cfd with with us for the whole portfolio. They have zero literally zero risk they want.
+
+Now, if they want to, let's say, they think this stock is going down. They have the physical, so they will sell, let's say they say, to sell 200 k now they have 800 k stock and - 1 million cfd so they don't touch the short part. This is contract with us. The total on this stock is - 200 k that's how they open short position. If they think the stock is going up, they buy. If they buy, let's say they buy K so they are 1 . 2 million long, 1 million short. So they are not long, 200 k this is how they do the long, short strategies.
+
+Now, the thing is that when we do this contract, if rain is short, this contract, right? So they are long stocks, short the contract with us, then we end up having long this, what we do. Basically, we end up having long exposure to this portfolio. This is what this is one of the things that we had. So we need to have this.
+说话人3 06:53
+Okay?
+说话人2 06:54
+The delta one book that we are hedging. It's either this or the,
+说话人3 07:08
+sorry.
+说话人2 07:10
+Then the cim are you familiar with cim.
+说话人3 08:05
+no.
+说话人2 08:06
+So the siam is basically it's a china inventory. So you have all these clients that have long positions, long stocks, right? And then this goes into the central inventory. Then we have consumer clients.
+说话人3 08:23
+Okay?
+说话人2 08:24
+That will come here if they want to short, then they basically these talks reselling the market and the clients have short exposure to this.
+说话人3 08:35
+I they have the long position and no.
+说话人2 08:39
+the consumers don't have position. They want to short.
+
+Let's say client a is long thousand stocks, and then this client b wants to short.
+
+So these thousand stocks sit in the inventory. So if this client wants to short, we will sell this. Let's say they want to short 200 stocks. We will short the 200 stock. Right? So they get the short exposure, but the client 1 had thousand stocks, right? Yeah. They can sell any time they want. It's their stock. So if it has been consumed, then there is that thing called recall. Because right now, what let's say, client be wanted to short 200. We took from here, we sold 200, right?
+
+When this client comes, there is only 800 physical stocks remaining, right? If they want to sell all thousand, let's say we will sell this in the market and the rest 200. Basically we will recall it's called recalled this plan, basically, they're short, will disappear. And the plan will take the right. There are some clients that this recall, right? The recall means that's a client sells today, right? Short today. Then in 2 days, let's say this guy says I want to sell my stocks. These 200, the client was - 200, right? In 2 days, they will have zero because we recall them. All right.
+
+But there are some clients that we don't recall. We have like contractual or whatever agreement with them that we are not gonna recall them. So what happens here that one desk will pick up this record? Instead of this client, this client line was - 200, then we said, give us back this 200, they end up having zero. If it's a protected client, we call it protected that we don't recall. This 200, it will not go to the client. This goes to delta one desk. This client will be still - 200, but delta one will be 2 plus 200. This is another source of risk that we are hedging. So that's the better one side of things.
+
+So the initially, hedging means basically you want, let's say you have this portfolio that you want to hedge, right? Let's say, 4,000 names or whatever, right? I guess.
+说话人3 11:25
+Sorry.
+说话人2 11:26
+Right? So basically, then you have some stocks that you can sell some futures, right? What we do is you are trying, let's say this is your portfolio, right? And then this is your hedge, and then hedges like you need to find how much to sell from each stock. Right? Let's say you donate them, w one, w two, wn you need to find this.
+
+What we do, you are trying to minimize the risk between portfolio minus this.
+
+So this is done with the factor models,
+说话人3 12:50
+barra models,
+说话人2 12:51
+barra factor models. R factor model actually just gives you the variance of a portfolio. Right? Then you minimize it. Yeah. But you can also do so. Before a couple of months ago, we were only trying to minimize the risk, but you can also do minus lambda times expected return of portfolio. This is where alpha comes in. If you put lambda to zero, then you just minimize the risk.
+
+If you increase your lambda, then it will try to maximize the expected return as well. Lambda will play some sort of trade off here. Okay? Yeah. For this, basically, you need some sort of stock signals.
+说话人3 13:39
+Okay?
+说话人2 13:42
+There's the delta one part, then the now in that cim as I said, you have the producers producers are the loan holders, so we call them producer, clients, logs. Right? And then you have consumers,
+说话人3 14:03
+the short set.
+说话人2 14:05
+So one client can be both producer and consumer, okay, right? When these consumers want to sell the stock, right? Then because our producer clients, they are all market makers like corn funds, so they buy and sell every day. Right? But no consumer client actually likes recourse because let's say they are finally saying the stock is gonna go down, they sell the stock.
+
+And then next day you are saying actually give me the give back the stock, right? Then they cannot materialize their offers, right? They don't want to be recalled.
+说话人3 14:43
+Yeah.
+说话人2 14:44
+That's why we do the stability calculation. Let's say one client, we see they have 1 million stock, right? If we can basically more than how much they gonna sell tomorrow, let's say the model says they're gonna sell 200 k tomorrow. Right? Or in the next 5 days, then we will tell this client, we only have 800 k this is the stability. So because we don't show all this 1 million to this guy, because if the producer says tomorrow, then you have to recall the.
+说话人3 15:23
+so the stability means are previously you required like this amount, but you.
+说话人2 15:33
+didn't forget about privilege.
+
+Right now, right? Every day at 5:00 pm or 6:00 pm we send the file to clients saying we have these stocks, stock one, we have, let's say, thousand stock two, we have ten k stock free. We have whatever 55 k right?
+
+And then in the morning, next day morning, they will tell us i'm gonna use five k from here, 40 k from here, et cetera. This is the availability that we sent to them, right? But the thing is that we don't show, we don't send them all these stocks that we have in the inventory. Sure. You need to show them the stable part. That's why if we say, for example, this producer, it has 1 million, mhm. Then we do the model and say, on average, they're gonna sell 200 k so we will send here 800 k only.
+说话人3 16:27
+got it.
+说话人2 16:32
+So that's the stability model that we have. The thing that it will most likely work on. Right? You are data science background. We calculate the stuff, and then this is just probabilistic model. Right? We are not trying to predict exactly stability. We just say we basically you come up with the probability distribution on how much they gonna sell, okay?
+
+And then you have like expected stability, then you can say the 90 percentiles, percentile, or stability, et cetera. Because if you have distribution function of your wto, that's it, right? You can get any information from that. You want. The reason that I said. We don't predict this because when you call it predict, let's say, for this client, we see 1 million. Then we say 800 k is going to be stable. Then they said, let's say, not 200, but 400 k so in reality, only 600 was stable, right? If you say i'm predicting, then the business will come to you and say, or actually you predicted 800, but they actually sold the way you predicted. They will sell 200, but they actually sold 400, whatever, right? And then like, why is it bad or whatever? But actually, that's why we don't say. We predict, we just say we have the distribution function.
+
+What happens is end of day. Let's say today we calculate all these capabilities.
+
+Let's say stock one is 80 % stable, stock two is 60 % stable. Some stocks are 0 % stable, right? And then when market opens next day, right? There is trading right over this. Client starts trading, selling, or buying, right? But at the same time, we want to know what is the stability during trading hours, we kind of model the stability end of day today, right? Let's say they had 1 million USD in one stock, and then we said it's going to be 80 % stable.
+
+Right now, next day, let's say 11:00 am this client sells hundred k now they have only 900 k right? We want to know intraday was the stable amount out of this.
+说话人3 19:15
+Stay. We kind.
+说话人2 19:19
+of modeled stability and on the yesterday.
+说话人3 19:23
+Yeah.
+说话人2 19:25
+But now today, like 3 hours past or 2 hours past, we know they sold hundred k what is the new updated stability?
+
+Because you have extra Information here right today, end of the day, you didn't know what's gonna happen tomorrow. Yeah. But now you do know that they sold already hundred k right? Maybe the stability, in this case, actually, just say how pathetically you see that whenever they sell hundred k it means they're gonna sell half of it, whatever the stability, actually, because here we were saying 800 k is going to be stable.
+
+En. But here we already know they sold hundred k or worse. Let's say we said they're gonna sell 200 k but they sold 300 k now you have only 700. So your stability was already, they already are less stable than that. So then you want to know this time.
+
+Now they have 700. How much of this is going to be stable?
+
+We need this logic. Basically. So you will have the previous day stability. You have the clients trading activity up to this time. Yeah. Then you basically try to model the new stability.
+说话人3 20:51
+How many times should we update this stability?
+说话人2 20:57
+It's kind of gonna be live.
+
+So every second or whatever.
+说话人3 21:02
+Okay?
+说话人2 21:05
+Yeah, I for analysis you can concentrate the only like the market opens 940, right? And closes 11 40:00, yeah. And then opens again at 1:00 pm right? So for starter, you can just concentrate, okay, they sold this much until 11:30 am session. Right? What's the new stability? Once like you have your results at central and we look at the results, and then we say this is a good model. It makes sense, right?
+
+And then you can start looking gather.
+
+other times as well for now don't worry about how many times you just think of. We have the am session how much they sold, and then you try to update the stability factors.
+说话人3 21:49
+Yeah.
+说话人2 21:50
+Yeah. So II completely understand this is a the new words for you, right? You never looked at this sort of problems, et cetera. So make sure you fully understand the problem before starting implementing it, ask whatever questions you want. Just make sure that you understand what we are doing fully before jumping and doing the coding.
+说话人3 22:13
+Okay?
+说话人2 22:15
+For any project basically just ask me 2,000 questions, ask you in questions, but make sure you understand over the business side why we are doing this, right?
+
+As a quantum. You never want to do something that you don't know why are you doing that. Even if I am asking whoever is asking you, they should tell you why they need that.
+说话人1 22:36
+Okay?
+说话人2 22:38
+So understand the project fully and then start modeling.
+说话人3 22:45
+Okay. Actually, the modeling, the most portion is calculate this stability.
+说话人2 22:56
+That's the only portion,
+说话人3 22:57
+not most Porsche. So for me, the first project is firstly understand the context. And is there any specific objective for the first like first project.
+说话人2 23:19
+objective? You mean?
+说话人3 23:21
+I the like calculate the stability, like I previously, we have the like some models to do this thing. But for me, I should add some novelty or some new features to do this modeling or other objective,
+说话人2 23:50
+objective.
+说话人3 23:51
+to like the target of the per first project.
+说话人2 23:57
+You mean the performance measure or?
+
+I what we do currently a it's a very, super simple, right? We never tried to model this. What we do currently is we in the morning we predicted a town is going to be stable. We look how much they have.
+
+Now. Let's say they have now 700 k we take the minimum of these two. So there is no modeling super simple logic right now. But then if you come up with your new numbers, we can do back test and see whether this model is better than this simple model. If it's better than that's it. We just start using it.
+说话人3 24:37
+Okay?
+说话人2 24:41
+Don't try to over complicate it, like it, introducing new features, et cetera. I would look just you have the previous day stability. You have the today's return, let's say, because this is am session, right? How much the client sold and try to do only on these two to update the stability factor. Let's do the step by step. Let's do like simple model that is still better than this. Then we see if there is a potential, we may be at some more like volume or whatever, like soft level Information and try to see whether we can get.
+说话人3 25:20
+it better.
+
+But for now,
+说话人2 25:22
+let's just concentrate. I can only use private stability and how much the clients of today try to give a new stability factor, right? You get used to the infrastructure, how we call that center. You get used to the business side of the finger center. Once we are good and comfortable with this, then we can see whether we want to do better. We want to improve the model or we want.
+说话人3 25:46
+to do some other project.
+说话人2 25:47
+Don't overcome complicate for now. Just.
+说话人3 25:51
+simple think, cool.
+说话人2 25:54
+You will need to get access to that y drive because all the data is there.
+说话人3 25:59
+I will raise the request, okay? After that, then I can say some like code to replicate all the logic or other.
+说话人2 26:11
+no like established functions. Essentially, they are in the fight. They just read files, then you shouldn't have problem pulling. The data is super simple. It's only in the files you will get it straight away.
+说话人3 26:21
+Okay? So,
+说话人2 26:22
+yeah, you're not gonna need to do lots of work on cleaning data, but it's very clean and.
+
+you will get the proper data.
+说话人1 26:33
+Thank you. Otherwise so good.
+说话人3 26:35
+Yeah, I.
+说话人1 26:36
+think.
+说话人3 26:37
+everyone is good and everyone is.
+说话人1 26:40
+support you. Nice. It's good to know it's one of the questions.
+说话人3 26:44
+Really, we will have a catch up every week and.
+说话人1 26:56
+yeah,
+说话人3 26:57
+report my.
+说话人1 26:59
+progress to you every week. Yeah, maybe not straight away, but at some point I was set up. So are you met? Eric? I.
+说话人3 27:08
+don't know.
+说话人1 27:10
+Yeah. So basically, you don't have any necessary.
+说话人3 27:18
+Hi, nice to meet you. Ruo, Xue.
+说话人1 27:22
+Sorry, nice in the cima yes. She will be working on cmt the first project we are trying to get the entire stability based on the present stability. Right? . . 72 is CCTV. We are early hours checking is precise that we have to. You only ask the crucial intraday as we did get located according to our and then all your report. Just for your real stop complaining or Complete to you and on. This is the application, sorry, right? You're welcome, thanks. Why? Then on the must be example, that's not a lot of America. I think that's right. Nasa.
