@@ -1,0 +1,219 @@
+﻿20250715_142805
+说话人1 00:17
+Cctv,
+
+ok, byebye. Policeman. So I should have thought about that is asking the final five nasa. Are you doing? It? So o nana. Nasa, nasa, nasa. You don't get that just sitting around, but they have that, which is that ii was strange one. Iii forgot that the old man it wasn't as big as you for when I was trying to talk to you. Yeah. But yesterday I was trying to do this complaint that one is so big.
+说话人2 03:14
+The same infrastructure from kwan site is in in here when this is production data, try not to if you want to open anything, right? For example, here to copy somewhere. So you don't modify by mistake ok right? Those are being used for the production.
+
+Then we have this big settings file in which basically just parameters thing like where to write results at sunshine. This is like the main parameters that is good. If you read it is in this code.
+
+When we do the stability calculation, we have this thing called around group id byebye.
+
+Ok. Most of them are just client names, because one client can have multiple accounts. So these are the accounts that belong to the client.
+说话人3 04:57
+Each kind have multiple accounts, ok but each account have multiple, many stocks.
+说话人2 05:04
+Yes. So for some this group id especially just client name, because we have client name. But we have this artificial thing called run group id because let's say one fund, they have two different types of trading, okay? This one is, let's say, more high, frequent. This is degree. Let's say this is doing daily. This is doing 5 day scenario. Ok this one stability profile will be different from this tablet profile.
+
+Basically, then we can create one round group, id whatever name you want to put and remodel this separately. And then we put another round group id and we model it separately, right? To capture the differences. For example, this and this, they are all cube. But because we know this is more stable, we model them separately. This is less stable models separately. And this is different.
+
+If you are starting to start with running, this is running supply name. For any all the accounts are basically they are all modeled the same way. There is no separation in the accounts. Okay? This one is just reading that exact 575.
+
+Because in order to get the client activity, how much they bought or sold, you need to count on this. This will be there any contacts. And then the next day, so this we get to the working day, so it will take into come the calendar.
+说话人3 06:46
+on the stability.
+说话人2 06:49
+No, just china market calendar.
+
+So if it's working there, if it's working in the job.
+说话人3 06:54
+So this.
+说话人2 06:58
+one,
+说话人1 07:00
+let it start when it tea,
+说话人2 07:04
+all the results and around the stability drop, it saves into this place. You can see here file name is basically this, right? And then this.
+说话人3 07:16
+just raise that file.
+说话人2 07:20
+So this file we have calculations for lots of things for this is older on the group by this for which we model. Right? Then for the stability calculation, you have time horizon, stability next day, 2 days after 5 days. And also you have expected stability, basically, when you do the proper distribution of your stability. Right? If you take the experience ability will be just the average or your stability.
+
+Then you have the stabler contacts, because you just context of your distribution function. Here, you see the.
+说话人1 08:01
+this.
+说话人2 08:03
+one is stability quantile, and then this is 50 quantile. And then you see, it's 99. If it's none, then expects tablets, because for expects tablets, you dont need this parameter. This is time, right? Ok value is stability culture.
+
+Here, basically, time horizon, we are choosing to be one, so we just treat her.
+说话人1 08:29
+byebye.
+
+Byebye.
+说话人2 08:54
+So that's you see the date that we are getting modest abilities. July 10, the end of the july.
+
+We calculated the stabilized to be dose. Yeah. Right now, we need to know the next day how much they sold,
+说话人1 09:16
+right? Go here.
+说话人2 09:20
+This is a class, ultimately what it does. It every half an hour. So saves all this. The cim dating here, if.
+说话人1 09:51
+you open any of them about nasa,
+说话人2 10:01
+it has rick, right? And it has the sound id yeah. And then this is the contact consumer that can only short producer that basically is only long, and both is basically can be both short and long.
+
+This class, what it does is just goes.
+说话人3 10:21
+This is the time step.
+说话人2 10:24
+So in here we have this. Basically, we have these things version. For each version, you have the time step. So I saw the 713 market closes 15, four, right? I do is get the data. So when we put the version right, it will go on take the latest available, for example, if you put version, I don't know, 145. It will take the latest available after that time, okok if you are putting sod the time was 740, right? So it will read these two fives.
+
+One is qv one is connect.
+说话人3 11:05
+What.
+说话人2 11:07
+I do here is i'm getting sod.
+说话人1 11:09
+right?
+说话人2 11:11
+And then get there and close and pdod now, if you merge those, you have sod running at this money quantity. I am close this money, eod this money. So if you want to know how much they sold in the morning, is this minus this because their advice will not be here. Yeah, so they in charge advice because we cannot sell your internet advice in china. So they are not reflecting care, so this number can only go down. It's only theirselves, okay? Until we need to get the inventory days for next day,
+说话人1 11:53
+right?
+说话人2 12:06
+Now, you have all your data from the unit. This was the model stability.
+说话人3 12:13
+That is the yesterday's calculated.
+说话人1 12:17
+stability, model stability.
+说话人3 12:22
+I like yesterday you calculate the stability number, but its corresponding date is yesterday or today,
+说话人2 12:35
+yesterday, end of.
+说话人3 12:36
+day, end of, okay.
+说话人2 12:38
+So it basically, you end of day when we do end of days, but we are trying to predict the next day.
+说话人3 12:43
+today. I use yesterday end of day's stability.
+说话人2 12:48
+Yes, i'm guess I saw this for today, so it opened like this. I am close of this monday and the day was this month. This is not for today for last week, because we don't have 2 days later yet.
+
+If you ultimately does the feeling right? And this is how we get the price. We provide a list of signals. Here i'm getting price unadjusted, but basically you have lots of things shape.
+
+You can get the risk at central or bargain.
+
+You can do this, but i'm not sure you're gonna need this, right?
+说话人1 13:44
+Nasa. Nasa. Nasa.
+说话人2 14:12
+This is basically all the data that we need to discuss, right? For you to initially have. This is 1 day. Ultimately, we want to have 5 day, but just get comfortable with this first try to see what's going on. Then we can do the rest.
+
+For example, if you want to know.
+说话人1 14:29
+the.
+说话人2 14:31
+autumn stability, right? That will be this divided by this.
+说话人3 14:37
+Nana.
+说话人2 14:41
+You see, the model was saying subject is going this much, but the actual one is this.
+说话人3 14:46
+for this value that.
+说话人1 14:51
+is.
+说话人3 14:53
+the end model modeling. Okay, right?
+说话人2 14:58
+The model was saying your experience stability is going to be 80 %. Right? And for this, it was actually this much.
+说话人1 15:08
+So for example, if you do this,
+说话人2 15:18
+because those are quantities, right? If we look at.
+说话人1 15:24
+the help us,
+说话人2 15:27
+I divide. This is a exchange rate, because this is the same way price.
+说话人1 15:36
+Lgdn. Ok. Nasa? Byebye.
+说话人2 15:58
+Model was saying the total stability is going to be this much.
+
+the national stability was this much in total? Delta? Was this much?
+说话人1 16:13
+If.
+说话人2 16:15
+you see your actual stability was I want to use 96 %, right?
+说话人1 16:27
+The.
+说话人2 16:29
+model predicted the model one was 94 %.
+
+So again, for each name, obviously, we are not gonna have good march. I've got the total level will be close. Yeah.
+
+This is the whole thing. So what you need to look at this, the mother was saying this right.
+
+Now you have a young stability.
+
+You have total stability, or, let's say, pm stability. This will be.
+说话人3 17:09
+h.
+说话人1 17:11
+did I think I know this.
+说话人2 17:13
+minus this, right? How much is it for? You can say? Am cell is equal to this minus this, right?
+说话人3 17:25
+Like this,
+说话人1 17:27
+right?
+说话人3 17:29
+H minus g divided by g.
+说话人2 17:36
+divided by.
+说话人3 17:37
+and up.
+说话人1 17:39
+purpose of it.
+说话人3 17:42
+But.
+说话人2 17:42
+whatever way you want to okay, so you see that they sold everything in the morning, right? Whatever they are, sorry.
+说话人3 18:16
+Pm stability is also divided by the beginning stability.
+
+It's.
+说话人2 18:27
+ultimately, you're basically you are trying to see how much they're gonna sell, right? It's up to you, right? How you model it, but because some maybe they didn't sell anything in the morning or am clause was already zero, so they sold everything ok then you get like a zero, something divided by zero. It's up to you. What do you want to do? Okay? This might, but after what you have this and this try to see if you can get this.
+说话人3 18:59
+Okay?
+说话人1 19:01
+It's more easy to practice. All right?
+说话人2 19:06
+Maybe there is no correlation. I don't know.
+说话人3 19:11
+What's is the sod data that's price times the stability?
+说话人2 19:19
+No, this is just how much data they had. The price times
+说话人3 19:24
+a quantity.
+说话人2 19:27
+Those are called this. If you want to make delta, you mark it by the price. Yeah, all right, yeah. This is pretty much it. So you can run this code for many days, like at least 2 weeks and see if there is any connection.
+
+I don't know how much it's going to help, but also you don't need to use this one only. You can do. So you can do 80 % 5 I.
+
+it's not that you only have this number. You have wasted all the distribution curve.
+
+Now, you have basically 80 percentile numbers,
+说话人3 20:17
+80 % numbers,
+说话人2 20:18
+80 % value, probably ok so instead of just one number for smaller for the extra stability, you have all the probably distinguish. Let's see if we can get some relationship between how much they are doing pm compared to what we were saying and what they did.
+说话人3 20:44
+Thank you. Can you send this file to me? Also? Sure.
+说话人2 20:47
+Let's just copy from here, right? Yeah.
+说话人1 20:51
+Nasa nasa.
+说话人2 21:10
+Nasa.
