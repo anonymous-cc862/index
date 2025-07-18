@@ -1,0 +1,171 @@
+﻿20250718_133029
+说话人1 00:18
+I don't think you need an option. Ii already went for your.
+说话人2 00:24
+own analysis is, yeah, actually, I use the whole data from the november 20th.
+说话人1 01:32
+Yeah, the only thing is.
+说话人2 01:35
+that.
+说话人1 01:36
+it's okay that but we have changed the model like a month ago.
+说话人2 01:42
+It because.
+说话人1 01:45
+the way these established facts are being calculated, it was different model until may. And then we change the model,
+说话人2 01:54
+so.
+说话人1 01:56
+it's not 1 to 1, but they are close. So I guess it's okay to use.
+说话人2 02:01
+Yeah, actually I want to use like 3 years or more long period of 3 years. Yeah. I checked it only has the data from this time, so.
+说话人1 02:15
+we were generating data in another folder.
+说话人2 02:19
+Okay? So for this time period, I do some and I also derive the data like the expect expected stability, which the parameter is down and . 5 points. These.
+说话人1 02:42
+are all time rising man,
+说话人2 02:44
+one and sod the quantity and clothes and price. I removed the eod because if we know eod then we can deduct the pm cell ratio. This is the data collection, and then I did some future engineering.
+说话人1 03:15
+Iii looked at that.
+
+So did you compare it with what we have currently? What we do currently?
+说话人2 03:26
+No, I didn't find, I didn't know how to get the currently without.
+说话人1 03:31
+currently we are doing, like if you had sod quantity, let's say,
+
+q extreme a then we had the stability factor, let's say, s then at the am close, let's say you have big quantity, quantity, stability, quantity, am.
+说话人2 04:00
+close.
+说话人1 04:04
+course. There should be.
+
+So now we are doing minimum, the a mod right by.
+说话人2 04:13
+s iii remember it. So.
+说话人1 04:18
+then let's say it. I am close. We have this, right? Let's say we have the current one. We have the how do you pronounce your name? Again? We have russia model.
+
+If we can generate this data until we have rick. So then we need to compare.
+说话人2 04:57
+byebye.
+
+Ok.
+说话人1 05:02
+Basically, you have different metrics to compare if you can generate this, and then we can sit down together, put this data in exit for like multiple days.
+
+until you update.
+说话人2 05:19
+Mhm. In this project, I used a like 20 %, the 20 % latest data as the test data set.
+说话人1 05:33
+Just 2 weeks is fine, ok so.
+说话人2 05:36
+2 weeks for to test. And.
+说话人1 05:39
+this is now we're gonna see the business impact. This is all like statistics, et cetera. But now we need to see the business impact. Yeah, right? I thought, sorry, and you have the 10,001. So needle, drake, for a trick, you have the delta. You are only doing math. For each week, we have today's delta. We know. Let's do the sod so that's interesting. You are not like the user and.
+说话人2 06:36
+you so much.
+说话人1 06:38
+your generation doesn't make. Maybe so did that.
+说话人2 06:48
+Yeah, maybe.
+说话人1 06:57
+Right? We have sod stability factor. We have current sunday. It is these two are am clause.
+说话人2 07:33
+That's right.
+
+Actually, for the model, the target, I need to minimize like the loss metric. It should be mse right?
+说话人1 07:47
+So the business target is going to be the it's not necessarily msc. It's a for more than it is fine, right? You can use msc for your machine learning techniques, but ultimately the business target is not the it's not that messy. So you want to minimize the.
+说话人2 08:16
+recall what is the.
+说话人1 08:20
+So if we have, let's say we had 2,000 positions in the morning, and then we were saying that it's going to be 80 % stable. Yeah, right. So we were saying for 1,600 is going to be stable.
+
+Now, I I am close, let's say this guy sold thousands.
+说话人2 08:42
+Right?
+说话人1 08:43
+So there is only problem remaining with the common methodology. We could say stable position is thousand. Right? I'm not saying I am close. Thousand, right? Current thousand, let's say you calculate it to be 800. Yeah. Why? No? When the client comes during lunch, and then they say they ask how much the stable you have. So now we say we have thousand, right? If you deploy your model, we're gonna say 800. Then let's say the client goes on, consumes this problem, whatever we tell them. Right now, let's assume we told them about them.
+
+Now if this guy, right, says 300, right? We will recall the 300 from consumer client. Record meaning. So we tell the, let's say, plan c is consumer. All right? And our israeli. Right? Now rain has thousand and see consumed all these thousand, right?
+
+Now, when rene sells 300, it's their long position, right? They can sell whenever they want. It really serves 300. Yeah. Because all the thousand was consumed, right? There is no stock anymore, physical stock. We will tell this client see return back 300. Yeah, so the client see will have - 700, only consume 300 will return in january. So this is called recall. 100 is called recall.
+说话人2 10:35
+I ii understand recall.
+说话人1 10:38
+Now, if we were to use your model, then only hundred would have been recalled. Ok right? Because client consume only 800.
+说话人2 10:49
+Yeah, but you.
+说话人1 10:50
+see why it's only hundred record, right?
+说话人2 10:52
+I in the business, we want to minimize the recall.
+说话人1 10:56
+It's a kind of trade off. So you want to minimize recall. But at the same time, because if you don't try anything, there will always be zero recall, but we don't do business, we will lose business. Right? It's a kind of you cannot go too conservative and say, no, actually only 200 this.
+说话人2 11:20
+I in the model, actually, we want to predict the stability,
+说话人1 11:26
+model stability,
+说话人2 11:27
+model stability, correctly, so that we must recover,
+说话人1 11:36
+minimize recall, but you shouldn't underestimate stability as well, because you can say, okay, ii need to be very conservative, and i'm gonna say only 200 is stable.
+
+Okay?
+
+But then if extra stability is a lot higher than you are losing business, because if you are saying the rest is not stable, we don't show to the client and we make money when client consumes, they pay us fee on the consumption size.
+
+If you go crazy and say stability is very low, then we will not show to the client, and we will not be making money on that. Yeah. So ultimately, if you look at all these days, we want to like average, every stability should be the same as your model.
+
+a month. Right? Because we know how much is the extra stability, right? Let's say your mother says thousand and we have the actual one, right? Let's say it's exotic. So if you sum up across all rates, there are levels should be the actual, and the model should be close to each other. Okay? This is not close. Yours, by default, it should be very close because they are doing machine learning. It will try to match the average anyway.
+说话人2 12:59
+Okay. I understand.
+说话人1 13:04
+So we need to look at that. The image that you sent the email, and this is called on this.
+
+Yeah, you don't need to do those.
+说话人2 13:20
+Okay.
+说话人1 13:22
+Let's see how this performs.
+说话人2 13:24
+Just compare with previous.
+说话人1 13:27
+because I we are never gonna be very precise on this, because this is client activity to be 100 % precise, it will mean that we know 100 % what client is gonna do. Right? If I know what rain is gonna do, I wouldn't be working here. Most likely I would have my phone fun, tried it like, you can never know its client training. Yeah.
+说话人2 13:55
+Yeah, I think also,
+说话人1 13:57
+so it's like trying to get better model at some point you need to stop because the end is never there, right? You will never get there.
+说话人2 14:08
+I first think like to modeling the client's behavior is quite difficult because we only know their historical behavior, but.
+说话人1 14:20
+and also, let's say the stock is now, right?
+
+And then market opens on those for crashes. Yeah, and client sets, right? You could never predicted that if you were to predict that, it would mean that you would have to predict if the stock is gonna crash, then what the client is gonna do in the stock crash. Neither of them is reasonable to expect with high precision. Right? So at some point, you need to say this is as good as I can get.
+
+Now, or that the same thing happened with the stability model, we had some simple model working for one. Yeah, and then I spent some time and then found another model that is a bit better than the old one. Mhm. But it's not like every day we are sitting down and trying to find a better model.
+说话人2 15:15
+Okay? This.
+说话人1 15:19
+one is super simple. That's why I expect whatever model you come up to or perform this. So once we have this, then we push it production. And then we think about what now to do, right?
+说话人2 15:33
+Okay, I will do it this afternoon.
+说话人1 15:36
+Just down data and we look at the data together,
+说话人2 15:41
+just 2 weeks.
+说话人1 15:44
+I a couple of days. We are not gonna look at 2 weeks anyway, right? You can do only 1 week.
+
+And then once we look together, I will show like high level numbers that i'm looking good, and then you can you can run it for many days. But visually will just look at 1 or 2 days, even 1 week or a couple of days is fine visually, just to make sure that we are on the same page. What to look at in terms of just find the model.
+说话人2 16:11
+All right. Thank you.
+说话人1 16:15
+Anything else? This catch ups is like, don't formalize these meetings, right? It's a it's super unofficial meeting, right? It's like, if you want to talk about anything in for it, this is the reason for the meeting. It's not to check your progress. Thank you.
+说话人2 17:02
+Another question.
+说话人1 17:04
+Nasa?
