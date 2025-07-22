@@ -1,0 +1,167 @@
+﻿20250722_085931
+说话人1 00:05
+Byebye.
+说话人2 00:25
+This is the data finds of this island.
+说话人3 00:27
+All right.
+说话人2 00:29
+First, I just get all the us did this. Yeah, right. By the way, thanks. So II now we have a city and close beauty. And then current is I should be then I established from the marketplace. So the USD many of this, right? And then the new one, especially just yours.
+说话人3 00:52
+Right?
+说话人2 00:55
+Then the recall will be defined us. Basically, if you are saying it's if your prediction or estimation was higher than the actual, the difference is recalled,
+说话人4 01:08
+right?
+说话人2 01:09
+So then the maximum of current minus eod is zero. Then the new one is basically your model. Yours minus cod zero. Right?
+
+Now, if you look at the aggregate prostate,
+说话人1 01:26
+for example, this.
+说话人2 01:29
+is how much we are saying available under the current on them. This is available under your model. This is the record and both now take this. Yeah.
+
+I read you are saying this. If we could use this, we could show 50 million more. Right?
+说话人1 01:59
+But.
+说话人2 02:00
+the record will be 7 million less. So this is this is good meaning we are actually showing more to the clients, and the record is still smaller than, right? So ultimately, these two numbers that you need to look at,
+
+usually both of them are positive. It's like you are showing more, but the records are a bit more as well. And then it becomes trade off. It's like, if you had 50,000,011 million, it's still better because you are showing a lot more than the record changes ok but if this is positive and this is negative, this is especially when we okay.
+说话人1 02:35
+This.
+说话人2 02:36
+is how many days. This is nice. And then what you need to do is and then this one was the 51 day expected probability. Let's look not only experience stability, but the context sometimes you want to be more conservative. And instead of using average probability, you want to use 80 percentile or et cetera. That's still in the data you have it. So instead of here using that for one day expect stability of the contact,
+说话人4 03:13
+so which contact like 8080.
+说话人2 03:17
+%, you can run for much, right?
+
+18 less than 75. So we have 75, actually. Okay? Let's go on this part.
+说话人1 03:34
+In here. That's not exactly right. So basically,
+说话人2 03:38
+for the same days, you can use for each of these combinations, right? For combinations, you can just these two numbers.
+说话人3 03:50
+Okay?
+说话人2 03:51
+You can just get these four, basically, just to have idea how much the costs are. So these four numbers, okay?
+说话人3 03:59
+And.
+说话人2 04:25
+then what we need to do is to move into 5 day stability.
+
+Let's do this first, and then we do the 5 day stability.
+说话人1 04:36
+So by defining these effects of contracts is under the exact the same trade structure, I basically just pop up those restrictions now following absolutely. There is no trade on structure change, but I spent I increase like precise in that sense. I don't need to change everything. And by the trade itself, it actually, besides, what is that I am asking one using the same level, I would like you to respect one of the traders I change besides more interesting. Is it watching some situation is that makes 103 level? Bs, a NASA.
+
+Nasa.
+说话人3 06:24
+nano.
+说话人2 07:07
+This just gets all the inventory data. Now you don't need a midday, right? This is just a card playing the stability.
+说话人4 07:16
+But when I build the model, I only use this time period data to train the model.
+说话人2 07:23
+The time horizon is.
+说话人4 07:26
+because previous I assume you.
+说话人2 07:31
+use one right in this analogy in the.
+说话人4 07:33
+latest since the end of two thousand and 20 four, I guess scenario. The start date. So I no.
+说话人2 07:46
+for training, you need more right? You are not trained on this, right? Yeah. I'm just showing something different.
+说话人1 07:56
+Yes. And then on the other hand, I think you the kids address emotion is that when I'm facing one single partner and I'm using the same shape structure, and on the safety one part of how we are not on commercial shock, that's what you're asking, right?
+
+In the then my answer is that if I'm trading with this one single person, exactly the same lower line and also exactly the same trade are commercial profile. I'm going to change
+说话人4 08:35
+NASA. Because each day miracles like 30 seconds.
+说话人2 08:53
+Really?
+说话人1 08:55
+Sorry.
+说话人2 08:56
+Okay. Now you have inventory data, right? For all.
+说话人3 09:00
+these days. So then let's just do just, yes, NASA. Ok.
+说话人1 09:20
+Byebye. Nasa.
+说话人2 10:05
+I so did they had this much? Right? They now if for this day, if you want to calculate how stable was the position, right? So you need to look next 5 days on these 5 days, what was the minimum amount? I divided by your sod so then you have,
+说话人1 10:23
+so I'm playing a new trade. Oki can use the same.
+说话人3 10:28
+sure. Which one would you like to start with the same level or the language?
+说话人1 10:34
+What I was saying sometimes.
+说话人3 10:35
+when it is, so I'm interested of island is not really started with the Syrian CNN in the industry. I some other way they will yeah, will be sponsored. So she wanted a person. Is it having so getting a few words? And on the end of the customer, you must have a way, whereas customers must be nasty. All of us should be employed by the big conference.
+
+So what I was trying from the simulation, here's the thing that's about we've started. And what we delivering. First is, right,
+说话人2 11:09
+for example, here, and you see that they start selling, right? That's why this is decreasing.
+说话人3 11:15
+Follow with the delivery where we will have to start monitoring. Is it? Yeah, of all the other China positions that they have and anything like that? That's right. And so forth. Byebye. Byebye. Nana.
+说话人2 11:38
+This number is small, right? The 5th day they had a lot less, right? That's why you have only 56.
+说话人3 11:44
+sample. It is so be position and that we have byebye.
+说话人2 12:02
+Now, for this day, for this rate, your stability was this much how you have the stability, right?
+说话人3 12:09
+In terms of.
+说话人2 12:12
+in your analysis? You get.
+说话人3 12:15
+for the single system alternatives.
+说话人2 12:17
+for when you had sod stability, right? From modern, so that you need to get now time rise and five, because basically sod you were saying, in the next 5 days, the stability is going to be, let's say, 80 %, right?
+
+Now I am close. You have some sex right? Now you still want to update this 5 day stability. Then you do your analysis and you get new model stability. Let's say you get. Here it was 18.
+
+Now you are saying, no, actually, it's 75. Here where I the main page is gone. Anyway, when we calculate this, recall, et cetera. Right now, you need to calculate the recall with respect to this number that we just calculated, because this is what.
+说话人3 13:36
+the.
+说话人2 13:38
+you need to compare with this. When we're comparing with pm close, right? Or aeod that was one day stability. Now you need to compare your results with this 5 day stability. Okay?
+
+The code is not clean here, because if you have risk missing a few days, then it's not gonna be correct. For example, if you had.
+说话人1 14:04
+that all makes.
+说话人2 14:05
+sense, thousand, right? Let's say day one, day 1 + 1, day 1 + 3. You are missing the day, right? Because they didn't have any position, but manager.
+说话人4 14:16
+why they didn't?
+说话人2 14:20
+No, there will be cases, okay,
+说话人1 14:23
+then.
+说话人2 14:28
+discover will not be calculated.
+说话人4 14:32
+I only need to calculate the true business day.
+说话人2 14:39
+It's always going to business day, but even business day, if they didn't have anything.
+说话人3 14:45
+out of portfolio positions, is.
+说话人2 14:49
+it gonna be the case?
+
+Actually don't worry, because the day before will be zero. That's fine.
+说话人4 14:57
+Ok so just rolling 5 days.
+说话人3 15:00
+The second part not just so far to doing so, go back upwards there, effectively set up with these trainings that we can do all. And that means, but also your handling a lot substance. So.
+说话人2 15:16
+let's do one day the others around you. We move to 5 day again for all of them,
+说话人4 15:24
+5 days for expected value and the quantum. Yes.
+说话人3 15:29
+Thank you,
+说话人1 15:35
+right? So basically I think so I imagine that watching.
+说话人3 15:41
+SARS, ok. Nasa.
