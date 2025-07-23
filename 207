@@ -70,3 +70,224 @@
 | **阶段二** | 分位数回归 | **仅包含**仓位被`调整`的数据 | 如果发生调整，预测其最终稳定性的分位数。 |
 
 通过这种分而治之的策略，你为问题的每个环节都建立了专门的模型。这比用一个单一模型“一锅端”要精确得多，也更能产出有价值的业务洞察。
+
+
+
+好的，这里提供一份完整的Python代码，以实现我们讨论的两阶段模型思路。
+
+代码将包含以下几个部分：
+
+1.  **数据模拟**：由于我们没有真实数据，将创建一个模拟的DataFrame，它会反映你所描述的数据特征（大量稳定仓位，部分清仓，部分调整）。
+2.  **特征工程与目标变量创建**：根据原始数据，生成模型所需的特征和两个目标变量（分类和回归）。
+3.  **模型训练**：分别训练阶段一的分类器和阶段二的分位数回归器。
+4.  **组合预测**：展示如何将两个模型组合起来，对新数据进行最终预测。
+5.  **结果评估**：简单展示模型的表现。
+
+代码中包含了详细的中文注释，以解释每一步的操作。
+
+-----
+
+### 完整Python实现代码
+
+```python
+import pandas as pd
+import numpy as np
+import xgboost as xgb
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
+from sklearn.preprocessing import LabelEncoder
+
+# --- 1. 数据模拟 ---
+# 创建一个与问题描述类似的模拟数据集，以便代码可以独立运行。
+# 在实际应用中，请替换成你自己的真实数据加载过程。
+print("--- 1. 正在创建模拟数据... ---")
+num_samples = 2000
+data = {
+    'ric': [f'STOCK_{i%100}.HK' for i in range(num_samples)],
+    'SOD': np.random.randint(100, 5000, size=num_samples) * 10,
+    'price_unadj': np.random.uniform(10, 100, size=num_samples),
+    'value': np.random.uniform(0.1, 0.9, size=num_samples)
+}
+df = pd.DataFrame(data)
+
+# 模拟AM_CLOSE和EOD的行为
+am_close_list = []
+eod_list = []
+
+for i, sod in enumerate(df['SOD']):
+    # 模拟上午的行为
+    prob = np.random.rand()
+    if prob < 0.8:  # 80%的概率上午仓位不变
+        am_close = sod
+    elif prob < 0.95: # 15%的概率上午仓位调整
+        am_close = sod * np.random.uniform(0.5, 1.5)
+    else: # 5%的概率上午清仓
+        am_close = 0
+    am_close_list.append(int(am_close))
+
+    # 模拟下午的行为（基于上午的结果）
+    prob2 = np.random.rand()
+    if am_close == 0: # 如果上午已清仓，下午肯定也是0
+        eod = 0
+    elif prob2 < 0.85: # 85%的概率下午仓位不变 (相对于AM_CLOSE)
+        eod = am_close
+    elif prob2 < 0.97: # 12%的概率下午仓位调整
+        eod = am_close * np.random.uniform(0.5, 1.5)
+    else: # 3%的概率下午清仓
+        eod = 0
+    eod_list.append(int(eod))
+
+df['AM_CLOSE'] = am_close_list
+df['EOD'] = eod_list
+
+print("模拟数据创建完成，数据样例如下：")
+print(df.head())
+print("\n")
+
+
+# --- 2. 特征工程与目标变量创建 ---
+print("--- 2. 正在进行特征工程和目标变量创建... ---")
+
+# 创建核心特征: 上午的稳定性
+# 处理分母为0的情况，如果SOD为0，稳定性设为0
+df['am_stability'] = (df['AM_CLOSE'] / df['SOD']).fillna(0)
+
+# 创建最终要预测的目标变量: PM稳定性
+df['PM_stability'] = (df['EOD'] / df['SOD']).fillna(0)
+
+# 创建阶段一（分类模型）的目标变量 PM_EVENT
+def create_pm_event(row):
+    # 注意：这里的比较要用浮点数，避免整数精度问题
+    if np.isclose(row['EOD'], row['AM_CLOSE']):
+        return 'STABLE'
+    elif row['EOD'] == 0:
+        return 'CLOSED'
+    else:
+        return 'ADJUSTED'
+
+df['PM_EVENT'] = df.apply(create_pm_event, axis=1)
+
+# 使用LabelEncoder将分类文本转换为数字，以便模型训练
+label_encoder = LabelEncoder()
+df['PM_EVENT_encoded'] = label_encoder.fit_transform(df['PM_EVENT'])
+# 查看编码和类别的对应关系
+event_mapping = {index: label for index, label in enumerate(label_encoder.classes_)}
+print(f"PM_EVENT类别编码映射: {event_mapping}")
+print(df[['AM_CLOSE', 'EOD', 'PM_EVENT', 'PM_EVENT_encoded']].head())
+print("\n")
+
+
+# --- 3. 数据集准备和拆分 ---
+print("--- 3. 正在拆分训练集和测试集... ---")
+# 定义用于建模的特征列
+# 注意：我们去掉了未来信息（EOD, PM_stability, PM_EVENT）和非数值列（ric）
+features = ['SOD', 'AM_CLOSE', 'price_unadj', 'value', 'am_stability']
+
+X = df[features]
+# 阶段一的目标变量
+y_class = df['PM_EVENT_encoded']
+# 阶段二的目标变量（以及最终评估的真实值）
+y_final_value = df['PM_stability']
+
+# 拆分数据为训练集和测试集
+X_train, X_test, y_train_class, y_test_class, y_train_final, y_test_final = \
+    train_test_split(X, y_class, y_final_value, test_size=0.25, random_state=42, stratify=y_class)
+
+print(f"训练集大小: {X_train.shape[0]}, 测试集大小: {X_test.shape[0]}")
+print("\n")
+
+
+# --- 4. 阶段一：训练分类模型 ---
+print("--- 4. 正在训练阶段一（分类）模型... ---")
+# 'ADJUSTED': 0, 'CLOSED': 1, 'STABLE': 2
+# 我们的类别是 'ADJUSTED', 'CLOSED', 'STABLE'
+adjusted_code = label_encoder.transform(['ADJUSTED'])[0]
+closed_code = label_encoder.transform(['CLOSED'])[0]
+stable_code = label_encoder.transform(['STABLE'])[0]
+
+
+xgb_classifier = xgb.XGBClassifier(objective='multi:softmax', num_class=3, use_label_encoder=False, eval_metric='mlogloss', random_state=42)
+xgb_classifier.fit(X_train, y_train_class)
+
+# 在测试集上评估分类模型
+y_pred_class = xgb_classifier.predict(X_test)
+print("阶段一（分类）模型性能报告:")
+print(classification_report(y_test_class, y_pred_class, target_names=label_encoder.classes_))
+print("\n")
+
+
+# --- 5. 阶段二：训练分位数回归模型 ---
+print("--- 5. 正在训练阶段二（分位数回归）模型... ---")
+# **关键步骤**: 只使用训练集中 PM_EVENT 为 'ADJUSTED' 的样本来训练回归模型
+adjusted_mask_train = (y_train_class == adjusted_code)
+X_train_reg = X_train[adjusted_mask_train]
+y_train_reg = y_train_final[adjusted_mask_train]
+
+print(f"用于训练回归模型的数据点数量: {len(X_train_reg)} (只包含'ADJUSTED'样本)")
+
+# 初始化并训练XGBoost分位数回归模型
+xgb_regressor = xgb.XGBRegressor(
+    objective='reg:quantileerror',
+    quantile_alpha=0.7,  # 设置为0.7分位数
+    random_state=42
+)
+xgb_regressor.fit(X_train_reg, y_train_reg)
+print("阶段二（分位数回归）模型训练完成。")
+print("\n")
+
+
+# --- 6. 组合两个模型进行最终预测 ---
+print("--- 6. 正在组合模型对测试集进行最终预测... ---")
+final_predictions = []
+
+# 遍历测试集中的每一个样本
+for i in range(len(X_test)):
+    sample = X_test.iloc[[i]] # 获取单行样本
+    
+    # 步骤1: 使用分类模型预测事件类型
+    predicted_event_code = xgb_classifier.predict(sample)[0]
+    
+    # 步骤2: 根据预测的事件类型，决定最终的预测值
+    if predicted_event_code == stable_code:
+        # 如果预测为'STABLE'，预测值等于当天的am_stability
+        prediction = sample['am_stability'].values[0]
+    elif predicted_event_code == closed_code:
+        # 如果预测为'CLOSED'，预测值为0
+        prediction = 0
+    else: # predicted_event_code == adjusted_code
+        # 如果预测为'ADJUSTED'，使用阶段二的回归模型进行预测
+        prediction = xgb_regressor.predict(sample)[0]
+        
+    final_predictions.append(prediction)
+
+# 将预测结果添加到测试集DataFrame中，方便比较
+X_test_results = X_test.copy()
+X_test_results['predicted_event'] = label_encoder.inverse_transform(y_pred_class)
+X_test_results['true_event'] = label_encoder.inverse_transform(y_test_class)
+X_test_results['final_prediction_q70'] = final_predictions
+X_test_results['true_PM_stability'] = y_test_final
+
+print("最终预测结果展示 (部分样本):")
+print(X_test_results[[
+    'am_stability', 
+    'true_event', 
+    'predicted_event', 
+    'true_PM_stability', 
+    'final_prediction_q70'
+]].head(15))
+
+# 简单计算一下 'ADJUSTED' 类别的预测误差
+adjusted_results = X_test_results[X_test_results['predicted_event'] == 'ADJUSTED']
+if not adjusted_results.empty:
+    mae = np.mean(np.abs(adjusted_results['true_PM_stability'] - adjusted_results['final_prediction_q70']))
+    print(f"\n对于被预测为'ADJUSTED'的样本，预测值与真实值的平均绝对误差(MAE): {mae:.4f}")
+
+```
+
+### 如何使用和解读代码
+
+1.  **替换数据**：将代码开头的数据模拟部分 (`--- 1. 数据模拟 ---`) 替换为你自己的数据加载和预处理逻辑。请确保你的DataFrame包含`SOD`, `AM_CLOSE`, `EOD`等必要列。
+2.  **特征工程**：`--- 2. 特征工程与目标变量创建 ---` 部分是核心。它创建了我们讨论过的 `am_stability` 和 `PM_EVENT`。你可以根据业务理解，在这里添加更多特征。
+3.  **模型训练**：代码会自动训练两个模型。你可以观察阶段一分类模型的性能报告，了解模型在判断“事件类型”上的准确率。一个好的分类器是整个方案成功的基础。
+4.  **最终预测**：最重要的部分是 `--- 6. 组合两个模型进行最终预测 ---`。它清晰地展示了如何对一个新样本，先分类，再根据分类结果决定是直接给出答案（0或am\_stability）还是调用回归模型。
+5.  **结果解读**：最后输出的表格直观地对比了真实情况和模型的预测路径。你可以看到，当模型预测事件为`STABLE`或`CLOSED`时，它会给出确定的值；当它预测为`ADJUSTED`时，才会给出一个由分位数回归模型计算出的、不确定的、浮动的预测值。这完全符合我们的设计初衷。
