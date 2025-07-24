@@ -464,3 +464,235 @@ print("3. 核心问题：我们能否利用'模型预测'和'上午的实际情�
 ```
 
 将以上所有代码块整合起来，您就有了一个完整的分析流程。请根据您的实际数据文件路径和数据情况，微调代码并运行，相信您能出色地完成任务。
+
+
+好的，您提出的问题非常关键，是机器学习项目实践中一个核心要点：**防止数据泄漏（Data Leakage）**。
+
+您说“feature里面不能出现eod”，这是完全正确的。在预测未来的任务中，我们的特征（features）只能使用预测时间点（中午）及之前已知的信息。
+
+我之前的代码在设计上**遵守了这一原则**：
+
+  * **特征 `X`** (`features = ['SOD', 'AM_CLOSE', 'price_unadj', 'value', 'am_stability']`) 全部基于日初（SOD）和中午（AM\_CLOSE）的数据，**不含任何EOD信息**。
+  * **目标 `y`** (`PM_EVENT` 和 `PM_stability`) 是我们希望模型学习去预测的“答案”，它们自然是由 `EOD` 计算得来的。在训练阶段，模型就是通过学习 “已知特征 `X`” 和 “未来答案 `y`” 之间的关系来构建能力的。
+
+可能是我代码的组织方式让这个过程显得有些模糊。为了让整个流程更加清晰，并且彻底杜绝任何误解，我将重构代码，模拟一个更真实的“训练”和“预测”分离的场景。
+
+### 重构后的代码思路
+
+我们将把流程分为三个独立的部分：
+
+1.  **特征工程函数 (`create_features`)**: 一个专门的函数，负责从原始数据中提取在“中午”这个时间点可用的所有特征。
+2.  **模型训练脚本 (`train_pipeline`)**: 一个模拟“过去”的脚本，它加载历史数据（包含EOD），调用特征工程函数，并训练两个阶段的模型，最后将训练好的模型（分类器和回归器）保存下来。
+3.  **预测脚本 (`prediction_pipeline`)**: 一个模拟“今天中午”的脚本，它只获取当天中午的数据（不包含EOD），调用特征工程函数，加载已保存的模型，并执行最终的预测。
+
+这种结构清晰地表明，在真正的预测环节，`EOD` 是完全未知的。
+
+-----
+
+### 重构后的完整Python代码
+
+```python
+import pandas as pd
+import numpy as np
+import xgboost as xgb
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
+from sklearn.preprocessing import LabelEncoder
+import joblib # 用于保存和加载模型
+
+# --- 0. 数据模拟 ---
+# 和之前一样，我们先创建一个模拟的原始数据集
+def simulate_data(num_samples=2000):
+    print("--- 正在创建模拟数据... ---")
+    data = {
+        'ric': [f'STOCK_{i%100}.HK' for i in range(num_samples)],
+        'SOD': np.random.randint(100, 5000, size=num_samples) * 10,
+        'price_unadj': np.random.uniform(10, 100, size=num_samples),
+        'value': np.random.uniform(0.1, 0.9, size=num_samples)
+    }
+    df = pd.DataFrame(data)
+
+    am_close_list, eod_list = [], []
+    for i, sod in enumerate(df['SOD']):
+        prob_am = np.random.rand()
+        am_close = sod if prob_am < 0.8 else (sod * np.random.uniform(0.5, 1.5) if prob_am < 0.95 else 0)
+        am_close_list.append(int(am_close))
+
+        prob_pm = np.random.rand()
+        eod = 0 if am_close == 0 else (am_close if prob_pm < 0.85 else (am_close * np.random.uniform(0.5, 1.5) if prob_pm < 0.97 else 0))
+        eod_list.append(int(eod))
+
+    df['AM_CLOSE'] = am_close_list
+    df['EOD'] = eod_list
+    return df
+
+# --- 1. 特征工程函数 (严格区分训练和预测) ---
+# 这是核心部分，我们定义一个函数来专门处理特征创建
+def create_features(df, is_training=True):
+    """
+    根据原始数据创建特征和目标。
+    - is_training=True: 用于模型训练，会创建特征X和目标y。
+    - is_training=False: 用于实时预测，只会创建特征X，因为此时EOD未知。
+    """
+    print(f"特征工程运行模式: {'训练' if is_training else '预测'}")
+    
+    # 步骤1: 创建所有在预测时点（中午）可用的特征 (Features X)
+    # 这些特征的计算绝对不依赖'EOD'
+    features_df = pd.DataFrame(index=df.index)
+    features_df['SOD'] = df['SOD']
+    features_df['AM_CLOSE'] = df['AM_CLOSE']
+    features_df['price_unadj'] = df['price_unadj']
+    features_df['value'] = df['value']
+    # 'am_stability' 只依赖于 SOD 和 AM_CLOSE，是合法的特征
+    features_df['am_stability'] = (df['AM_CLOSE'] / df['SOD']).fillna(0)
+    
+    if not is_training:
+        # 如果是预测模式，只返回特征集X
+        return features_df
+    else:
+        # 如果是训练模式，我们还需要创建“答案”（目标y）
+        # 步骤2: 创建目标变量 (Target y)，这部分依赖未来信息 'EOD'
+        
+        # 目标y1: PM_EVENT 分类标签
+        def get_pm_event(row):
+            if np.isclose(row['EOD'], row['AM_CLOSE']): return 'STABLE'
+            if row['EOD'] == 0: return 'CLOSED'
+            return 'ADJUSTED'
+        
+        y_class = df.apply(get_pm_event, axis=1)
+        
+        # 目标y2: PM_stability 最终回归值
+        y_final_value = (df['EOD'] / df['SOD']).fillna(0)
+        
+        return features_df, y_class, y_final_value
+
+# --- 2. 模型训练管道 (模拟历史操作) ---
+def train_pipeline():
+    """
+    这个函数模拟完整的模型训练、评估和保存过程。
+    在真实世界中，这个脚本会在历史数据上定期运行。
+    """
+    print("\n" + "="*50)
+    print("      执行模型训练管道 (train_pipeline)")
+    print("="*50)
+    
+    # 加载历史数据（包含EOD）
+    historical_df = simulate_data()
+    
+    # 创建特征和目标
+    X, y_class, y_final_value = create_features(historical_df, is_training=True)
+    
+    # 编码分类标签
+    label_encoder = LabelEncoder()
+    y_class_encoded = label_encoder.fit_transform(y_class)
+    joblib.dump(label_encoder, 'label_encoder.pkl') # 保存编码器以备后用
+    
+    # 数据拆分
+    X_train, X_test, y_train_class, y_test_class, y_train_final, y_test_final = \
+        train_test_split(X, y_class_encoded, y_final_value, test_size=0.25, random_state=42, stratify=y_class_encoded)
+        
+    # === 训练阶段一：分类器 ===
+    print("\n--- 训练阶段一分类器 ---")
+    xgb_classifier = xgb.XGBClassifier(objective='multi:softmax', num_class=len(label_encoder.classes_), use_label_encoder=False, eval_metric='mlogloss', random_state=42)
+    xgb_classifier.fit(X_train, y_train_class)
+    joblib.dump(xgb_classifier, 'xgb_classifier.pkl') # 保存模型
+
+    # === 训练阶段二：回归器 ===
+    print("\n--- 训练阶段二回归器 ---")
+    adjusted_code = label_encoder.transform(['ADJUSTED'])[0]
+    adjusted_mask_train = (y_train_class == adjusted_code)
+    X_train_reg = X_train[adjusted_mask_train]
+    y_train_reg = y_train_final[adjusted_mask_train]
+    
+    xgb_regressor = xgb.XGBRegressor(objective='reg:quantileerror', quantile_alpha=0.7, random_state=42)
+    xgb_regressor.fit(X_train_reg, y_train_reg)
+    joblib.dump(xgb_regressor, 'xgb_regressor.pkl') # 保存模型
+    
+    print("\n模型训练完成并已保存到本地文件 (classifier, regressor, encoder)。")
+    print("="*50)
+
+# --- 3. 实时预测管道 (模拟当天中午操作) ---
+def prediction_pipeline(new_data):
+    """
+    这个函数模拟当天的实时预测流程。
+    它接收不包含'EOD'列的新数据。
+    """
+    print("\n" + "="*50)
+    print("      执行实时预测管道 (prediction_pipeline)")
+    print("="*50)
+    
+    if 'EOD' in new_data.columns:
+        raise ValueError("预测数据中不能包含'EOD'列，防止数据泄漏!")
+        
+    # 加载已训练好的模型和编码器
+    print("--- 加载已保存的模型 ---")
+    xgb_classifier = joblib.load('xgb_classifier.pkl')
+    xgb_regressor = joblib.load('xgb_regressor.pkl')
+    label_encoder = joblib.load('label_encoder.pkl')
+    
+    # 从新数据中创建特征（注意 is_training=False）
+    X_new = create_features(new_data, is_training=False)
+    
+    # 执行两阶段预测
+    print("\n--- 执行两阶段预测 ---")
+    # 1. 预测事件类型
+    predicted_event_codes = xgb_classifier.predict(X_new)
+    
+    # 获取类别编码
+    adjusted_code = label_encoder.transform(['ADJUSTED'])[0]
+    closed_code = label_encoder.transform(['CLOSED'])[0]
+    stable_code = label_encoder.transform(['STABLE'])[0]
+    
+    # 2. 根据类型进行最终预测
+    final_predictions = []
+    for i in range(len(X_new)):
+        event_code = predicted_event_codes[i]
+        sample_features = X_new.iloc[[i]]
+        
+        if event_code == stable_code:
+            prediction = sample_features['am_stability'].values[0]
+        elif event_code == closed_code:
+            prediction = 0
+        else: # ADJUSTED
+            prediction = xgb_regressor.predict(sample_features)[0]
+        final_predictions.append(prediction)
+        
+    return final_predictions
+
+# --- 主程序 ---
+if __name__ == "__main__":
+    # 步骤一：运行训练管道，生成并保存模型
+    train_pipeline()
+    
+    # 步骤二：模拟当天中午接收到的一批新数据（注意：没有EOD列！）
+    print("\n--- 模拟接收当天中午的新数据（不含EOD）---")
+    today_data = simulate_data(num_samples=5)
+    
+    # 为了验证，我们偷偷保存一下真实答案
+    true_answers = (today_data['EOD'] / today_data['SOD']).fillna(0)
+    
+    # 把EOD列去掉，模拟真实预测场景
+    today_data_without_eod = today_data.drop(columns=['EOD'])
+    print("待预测的新数据样例如下 (无EOD列):")
+    print(today_data_without_eod)
+    
+    # 步骤三：运行预测管道
+    predictions = prediction_pipeline(today_data_without_eod)
+    
+    # 显示最终结果
+    result_df = today_data_without_eod.copy()
+    result_df['PREDICTED_PM_stability_q70'] = predictions
+    result_df['(TRUE_PM_stability_for_verification)'] = true_answers
+    
+    print("\n--- 最终预测结果 ---")
+    print(result_df)
+
+```
+
+### 代码重构的核心改进
+
+1.  **功能模块化**：`create_features`, `train_pipeline`, `prediction_pipeline` 三个函数各司其职，清晰地分离了特征工程、模型训练和实时预测，这在生产环境中是更标准的做法。
+2.  **严格防止泄漏**：`create_features`函数中的 `is_training` 参数是关键。它确保了在调用预测流程时，程序逻辑上**完全无法**接触到`EOD`信息来构建特征。`prediction_pipeline`函数的入口也增加了检查，如果传入了含`EOD`的数据会直接报错。
+3.  **模型持久化**：使用 `joblib` 来保存和加载训练好的模型 (`.pkl`文件)。这模拟了真实的部署场景：你只需要训练一次模型，之后就可以反复加载它来服务于成千上万次的预测请求，而无需重新训练。
+
+这个重构后的版本，逻辑更严谨，代码结构更清晰，彻底解决了您关于特征构造中可能存在数据泄漏的担忧。
