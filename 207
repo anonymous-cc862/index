@@ -291,3 +291,176 @@ if not adjusted_results.empty:
 3.  **模型训练**：代码会自动训练两个模型。你可以观察阶段一分类模型的性能报告，了解模型在判断“事件类型”上的准确率。一个好的分类器是整个方案成功的基础。
 4.  **最终预测**：最重要的部分是 `--- 6. 组合两个模型进行最终预测 ---`。它清晰地展示了如何对一个新样本，先分类，再根据分类结果决定是直接给出答案（0或am\_stability）还是调用回归模型。
 5.  **结果解读**：最后输出的表格直观地对比了真实情况和模型的预测路径。你可以看到，当模型预测事件为`STABLE`或`CLOSED`时，它会给出确定的值；当它预测为`ADJUSTED`时，才会给出一个由分位数回归模型计算出的、不确定的、浮动的预测值。这完全符合我们的设计初衷。
+
+
+好的，完全理解。基于之前的对话内容和您提供的数据截图，我已经清晰地了解了领导布置的任务。
+
+任务的核心是：**利用历史数据，对比分析模型预测的资金稳定性（`value`列）与客户在交易日内的实际资金稳定性，并深入探究上午（AM）和下午（PM）的交易行为模式。**
+
+下面我将为您提供一份完整的 Python 代码，它将引导您完成这个任务。代码中包含了详细的注释，解释了每一步的目的和计算逻辑。
+
+-----
+
+### **第一步：准备工作与数据加载**
+
+首先，请将您所有的每日数据合并成一个文件（例如 `daily_data.csv`），确保文件中包含 `date` 这一列。然后，我们可以使用 `pandas` 来加载和处理数据。
+
+为了让代码可以独立运行和测试，我将首先创建一个与您数据结构类似的模拟 DataFrame。在您的实际操作中，您可以跳过数据模拟部分，直接加载您自己的 CSV 文件。
+
+```python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# --- 1. 数据加载与准备 ---
+
+# === 模拟数据创建 (您可以替换成自己的数据加载) ===
+# 真实场景下，您应该使用这行代码来加载您的数据文件:
+# df = pd.read_csv('your_data_file.csv', parse_dates=['date'])
+
+# 为了演示，我们创建一个模拟的DataFrame
+data = {
+    'date': ['2025-07-15', '2025-07-15', '2025-07-15', '2025-07-16', '2025-07-16', '2025-07-16'],
+    'ric': ['000622.SZ', '300391.SZ', '600658.SS', '000622.SZ', '300391.SZ', '600658.SS'],
+    'SEDOL': ['6980139', 'BP82BG5', '6089586', '6980139', 'BP82BG5', '6089586'],
+    'value': [0.95, 0.80, 0.98, 0.96, 0.82, 0.99], # 模型预测的稳定性
+    'SOD': [4400.0, 500.0, 657.0, 4400.0, 800.0, 657.0], # Start of Day 持仓量
+    'AM_CLOSE': [4400.0, 200.0, 657.0, 4000.0, 0.0, 600.0],   # AM Close 持仓量
+    'EOD': [4400.0, 100.0, 657.0, 3800.0, 0.0, 550.0],     # End of Day 持仓量
+    'price_unadj': [0.16, 4.51, 4.75, 0.17, 4.45, 4.80]
+}
+df = pd.DataFrame(data)
+df['date'] = pd.to_datetime(df['date'])
+# =======================================================
+
+# 为了代码可读性，将'value'重命名为'model_stability'
+df.rename(columns={'value': 'model_stability'}, inplace=True)
+
+print("--- 原始数据预览 ---")
+print(df.head())
+print("\n")
+```
+
+### **第二步：计算日内的关键指标（每笔持仓）**
+
+根据领导的要求，我们需要计算每笔持仓（每一行）的实际稳定性、上午卖出量等指标。
+
+```python
+# --- 2. 计算每笔持仓的日内指标 ---
+
+# 避免除以零的错误
+def safe_division(numerator, denominator):
+    """一个安全的除法函数，分母为0时返回0"""
+    return np.divide(numerator, denominator, out=np.zeros_like(numerator, dtype=float), where=(denominator!=0))
+
+# 计算上午和下午的卖出量
+df['AM_sell_qty'] = df['SOD'] - df['AM_CLOSE']
+df['PM_sell_qty'] = df['AM_CLOSE'] - df['EOD']
+df['total_sell_qty'] = df['SOD'] - df['EOD']
+
+# 计算实际的资金稳定性
+# 全天实际稳定性 = EOD持仓 / SOD持仓
+df['actual_EOD_stability'] = safe_division(df['EOD'], df['SOD'])
+# 上午实际稳定性 = AM_CLOSE持仓 / SOD持仓
+df['actual_AM_stability'] = safe_division(df['AM_CLOSE'], df['SOD'])
+# 下午实际稳定性 = EOD持仓 / AM_CLOSE持仓 (衡量下午时段的稳定性)
+df['actual_PM_stability'] = safe_division(df['EOD'], df['AM_CLOSE'])
+
+
+print("--- 计算日内指标后的数据 ---")
+print(df[['date', 'ric', 'model_stability', 'actual_EOD_stability', 'actual_AM_stability', 'actual_PM_stability', 'AM_sell_qty', 'PM_sell_qty']].head())
+print("\n")
+```
+
+### **第三步：进行每日聚合分析（核心任务）**
+
+领导强调，单个持仓的预测可能不准，但\*\*总体水平（total level）\*\*应该会很接近。因此，我们需要按天聚合，计算每日总体的模型预测稳定性和实际稳定性。
+
+```python
+# --- 3. 按天聚合，分析总体水平 ---
+
+# 首先，计算每个持仓的市值（monetary value）
+df['SOD_value'] = df['SOD'] * df['price_unadj']
+df['EOD_value'] = df['EOD'] * df['price_unadj']
+
+# 按日期分组
+daily_grouped = df.groupby('date')
+
+# 计算每日聚合数据
+# 1. 计算每日总体的实际稳定性
+daily_summary = daily_grouped.agg(
+    total_SOD_value=('SOD_value', 'sum'),
+    total_EOD_value=('EOD_value', 'sum')
+)
+daily_summary['agg_actual_stability'] = daily_summary['total_EOD_value'] / daily_summary['total_SOD_value']
+
+# 2. 计算每日总体的模型加权平均稳定性
+# 这是衡量模型在总体预测表现的关键指标
+# 权重是每个持仓的期初市值
+df['weighted_model_stability'] = df['model_stability'] * df['SOD_value']
+weighted_model_sum = daily_grouped['weighted_model_stability'].sum()
+daily_summary['agg_model_stability'] = weighted_model_sum / daily_summary['total_SOD_value']
+
+
+print("--- 每日总体稳定性对比分析 ---")
+# daily_summary[['agg_model_stability', 'agg_actual_stability']] 现在包含了模型预测和实际情况的每日对比
+print(daily_summary[['agg_model_stability', 'agg_actual_stability']])
+print("\n")
+```
+
+### **第四步：结果可视化与解读**
+
+数据表格虽然精确，但图表能更直观地展示模型性能的趋势和差异。
+
+```python
+# --- 4. 结果可视化 ---
+
+plt.style.use('seaborn-v0_8-whitegrid')
+fig, ax = plt.subplots(figsize=(12, 6))
+
+daily_summary.plot(
+    kind='line',
+    y=['agg_model_stability', 'agg_actual_stability'],
+    ax=ax,
+    marker='o',
+    linestyle='--'
+)
+
+plt.title('每日模型预测稳定性 vs 实际稳定性', fontsize=16)
+plt.ylabel('稳定性 (比例)', fontsize=12)
+plt.xlabel('日期', fontsize=12)
+plt.legend(['模型预测 (Aggregate Model)', '实际情况 (Aggregate Actual)'], fontsize=10)
+plt.ylim(0.8, 1.0) # 根据您的数据范围调整Y轴
+plt.grid(True)
+plt.show()
+
+```
+
+**如何解读这张图：**
+如果两条线非常贴近，说明您的模型在预测每日总体资金稳定性方面做得非常好。如果两条线趋势一致但有固定偏差，可能模型存在系统性高估或低估。如果两条线波动不一致，说明模型可能没有很好地捕捉到影响资金稳定性的关键因素。
+
+### **第五步：深入探索（回答领导的进阶问题）**
+
+领导还希望您探索模型与上午/下午交易行为的关系。例如，**模型预测的稳定性是否与上午的卖出行为有关？**
+
+```python
+# --- 5. 进阶探索：模型与日内行为的关联 ---
+
+# 我们可以计算模型稳定性与上午实际稳定性的每日差异
+daily_summary['model_vs_AM_diff'] = daily_summary['agg_model_stability'] - daily_grouped.apply(
+    lambda x: (x['AM_CLOSE'] * x['price_unadj']).sum() / (x['SOD'] * x['price_unadj']).sum()
+)
+
+print("--- 模型预测与上午实际稳定性的差异 ---")
+print(daily_summary[['agg_model_stability', 'model_vs_AM_diff']])
+print("\n")
+
+print("分析建议：")
+print("1. 观察 'model_vs_AM_diff' 列。如果这个差异很大，说明大部分变动发生在上午。")
+print("2. 您可以进一步做相关性分析，例如分析 `df['model_stability']` 和 `df['actual_AM_stability']` 的关系，看看模型对上午的预测能力如何。")
+print("3. 核心问题：我们能否利用'模型预测'和'上午的实际情况'来更好地预测'下午的行为'？这可能需要您构建一个新的简单模型或进行更复杂的相关性分析。")
+
+```
+
+将以上所有代码块整合起来，您就有了一个完整的分析流程。请根据您的实际数据文件路径和数据情况，微调代码并运行，相信您能出色地完成任务。
