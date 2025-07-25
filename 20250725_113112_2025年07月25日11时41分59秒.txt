@@ -1,0 +1,45 @@
+﻿20250725_113112
+说话人1 00:00
+NASA nano. I'm just looking at the back of London, I guess, is a great problem. Listen, everybody want to research, so they can try to talk about it.
+说话人2 00:33
+So the university world, it's a bit different from especially the box, right? So you don't need to, you don't need to terrorize when, obviously, you need to be sure that whatever you are using is correct from theoretical perspective as well. Right? But for example, when it's like, when it did your first situation, and you found that like my gpm is good, it then forget about other models, just use this one, okay?
+
+For this particular project, you don't need to run for different models on every time jumping from 1 to 5, right? So your results were good. They were way better than we have currently, right? Because I think the perfect perfection is the worst enemy of progress. Yeah. Right? If you try to improve, first, you never finish that thing, right? And then delivery is very important for us, right? We are judged by what we deliver. So if you already have some good, significantly better than the current one, I'm not saying you don't try to improve it, but yeah, don't spend your majority time on it. Right? So you got something, if you have a quick think, or if something just suddenly comes to your mind that or actually I should try this as well. That's perfect, right? I'm not discouraging trying new things, but you have this one.
+
+Now. Let's work to push it into production, so people can use it. Right? And then after that, then we need to decide, for example, if you are decreasing the record by 10 million, right? If you tell me that if I spent one more month, I can decrease the record by 11 million or 10 . 5 million, most likely I'm gonna say don't do that. Right? Because in a month you can do project that brings 2 million from other place, right? Thanks a lot. So I think we have very good results.
+
+Now we worry about pushing this into production. And so there are a few things, right? Look at the 5 day 1 that's very important. And then the the context of what I meant, right? Again, this is a bit cheating in terms of the correctness. But now you take, let's say, one day expected stability, right? So this is your future. Correct? You check how good it was, right? What I now, you have all these other contacts, right? Like 0 . 5, 0 . 7, 0 . 8, 0 . 95, whatever. Just take this number, instead of this number put in here.
+说话人3 03:31
+This is when I training the model that this feature is calculated by eod divided by sod.
+说话人2 03:46
+right? No. You take the stability factor, right? From our files that are calculating kind of day.
+说话人3 03:54
+You mean, I just take this value as the feature rather than the why target.
+说话人2 04:01
+So the way it's being done, let's say you have different users, right? That said that I want this is one, and then you have clients, let's say you have, I don't know, the millennium, and then you have two sigma, et cetera.
+
+For example, Delta one, they don't use expected stability. They would say we're gonna use, actually, that they use 50 percentile. Millennium. We need to be a bit more conservative, so we are showing, let's say, a 80 % time, okay? To signal, we don't need to be super conservative. We are using 5 day expected stability. Okay. Right? We need all these things that and then when the user asked for data, right? We say if you want 50 percentile, this is the number. If you want 80 percentile, this is the number. Right? Now, you have done only one. They expect stability.
+说话人3 04:57
+as the feature you.
+说话人2 04:59
+mean, as what you are trying to predict, right? The feature, meaning, model stability, stability factor, right? Now, try to do them for this as well.
+说话人3 05:13
+When I predict this one, I used a regression loss and minimize mse and when I predict the quantile as.
+说话人2 05:31
+no, what I'm saying is when you predict one time you get one right now, you read the model stability factor from our modern,
+说话人3 05:43
+that's the value.
+说话人2 05:45
+Yes, but so to get that value, you are saying expected stability, time rise and is equal to one.
+说话人3 05:51
+Right?
+说话人2 05:53
+What I'm saying, instead of this, just pick stability, quantile. It's in the file para m is equal to a . 8. Instead of using value here, use value of this one. Keep everything the rest ok like. If anything else you are doing is the same, just run for this instead of value this.
+
+Okay? So going time horizon five and having results for all these contacts is basically the single priority item.
+
+Don't worry about. The other stuff is like if you can increase, yeah, by 1 % or by 10 %, we want this like the trading is waiting for us to to do this, right?
+说话人3 06:46
+So more practically, I will do it as soon as possible.
+说话人1 06:51
+Thank you. Byebye. It is nana.
