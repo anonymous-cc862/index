@@ -1,0 +1,129 @@
+﻿20250801_134846
+说话人1 00:00
+Yeah. That's good.
+说话人2 00:39
+Because the results show the most of the clients have the decreased record, different recall and increased usd show. That only for the ci cii forgot the names.
+说话人3 01:03
+The 21, one is capital fund management. I think. You said you changed something right? Like what you are trying to model.
+说话人2 01:16
+I miss true. Ii didn't change the model framework for the whole process. For each client. I just previously I just predict the eod divided by sod right now, I also predict the like the eod divided by sod and this is the prediction, but I take the minimal between this one and a i'm close divided by sod because I found that some.
+说话人3 02:04
+no, I only is always smaller than I am close, right?
+说话人2 02:08
+But when I predict this ratio, sometimes it is larger than aeod is larger than a uncle is.
+说话人3 02:18
+impossible.
+说话人2 02:20
+Yeah. But the prediction can, or.
+说话人3 02:25
+you mean your prediction is learning? Yeah.
+说话人2 02:27
+For the prediction, finally, I take this, mean,
+说话人3 02:31
+when you predict eod over sod is larger than I am,
+说话人2 02:36
+that the true value is smaller, but sometimes the prediction is larger. I take this minimal value as the final result, as the final prediction.
+说话人3 02:50
+You just copy your prediction. I am, that's fine. Ideally, the model should have been able to do that. They are doing regression.
+说话人2 02:59
+No. Ii previously, at the beginning, I did the pre regression, but I think the mic is quite larger than expos and.
+说话人3 03:12
+no, but you do x equals regression. That's what I.
+说话人2 03:16
+actually not the regression by the huber loss. You mean the last function? No.
+说话人3 03:25
+You use hgb regressor, right? Yeah, that's what I mean. Yeah? Because there's actually be classifier,
+说话人2 03:30
+yeah, regression. But I change the loss function as the hoover loss, because I found the result is better. It gave more penalty to the larger error samples.
+说话人3 03:50
+Cool. Did you try to show on production eyes, asian?
+说话人2 03:53
+No. Is everyone? I'm.
+说话人3 04:00
+sure the guy sitting behind you.
+说话人2 04:02
+Did.
+说话人3 04:04
+you chat with him about production in production? I think the code.
+说话人2 04:08
+I.
+说话人3 04:10
+let's start with that. So first check if you can find once at the parameter to run for our clients, not, you can have or you should have one trained object for each client, right? But ideally we want to have one parameter set only.
+说话人2 04:27
+Yeah, okay.
+说话人3 04:29
+And then we just move this into production, okay? And also you can write present like super small presentation, right? Don't spend too much time on it.
+
+It's not even presentation some some basic something to show to business. What's the impact of this? So you don't need to plot 200 different things. You don't have to quotes the the error metrics, et cetera. You can just say this is the process we are using the extra boost for this. And this is the result. So ii did it from numbers. You only want to show that the current show, current record, new phone, new record, planned level average across days.
+
+Okay? One more thing, though. When we say, let's say, let's say there was thousand sod right? And then the sod was stability was, let's say, 0 . 8 %, right? And then we calculate whatever method, right? And this time, let's say they already sold 200, right? So we are below with 800. We calculate new stability metrics, so we have 800 stable. I don't know, let's say, 20 % on its success table. When we calculate the recall, we do the, let's say in the end, it was zero. The recall that you calculate would be hundred 60. Yeah, but this is this is kind of theoretical recall, because here you are assuming that when you say that hundred 60s table, some clients will go and fully consume this. Right? But if no client consumes, there is no record. Right? What one more starts that you can run? Just? Well, any client you can pick like or you can run on all of them is most likely clients are not gonna, if you have, for example, 50 million or 20 million inventory right on one name.
+
+And then we calculate the, let's say, stability to be 80 %. Right? So we are saying 16 million stable, right? Then those stocks are usually very like a quality stock, like multi, et cetera, that we have lots of inventory, but nobody short small diet, 20 million level. Right? Then what happens is we say 16 million is stable, and then we look at the end of the they still hold 20 million stock, so we are saying zero record, right? And so on. And then basically, your record might be a bit understated from reality. So what we want to do is, let's say, when you do this, you assume that maximum 2 million usd will be consumed.
+
+And then we calculate the recall for this.
+
+Let's say you had 20 million, yeah. We sent stability is 80 %, right? 16 million stable. And then end of day, it was actually only 2 million left. So they sold basically 90 %, right? So the extra stability was 10 %. When you calculate your record currently, you would say 14 million was recalled. Right? Yeah. But in reality, if you assume that only 2 million was consumed from here, then not nothing would have been recalled. Mhm. Right. So at each name, you put these 2 million other cup on consumption and see whether how much is the recall in that case.
+说话人2 08:38
+Okay. So firstly, I need to estimate this.
+说话人3 08:44
+No, just assume 2 million.
+
+That's a kind of qualitative assessment that ok no clan goes on short, 20 million stock, like 2 million is fine.
+
+Or even 1 million, I don't know. It's like you can run them. How long does it run to take to run all the data that you send me.
+说话人2 09:08
+for one model about?
+说话人3 09:11
+Now you forget about different models. It's actually boost. That's it. You don't need to test both models all the time.
+说话人2 09:19
+I the running time about 22 minutes.
+说话人3 09:25
+So you can donate all the plants in 20 minutes. Yeah, okay.
+说话人2 09:29
+Actually, for the two, the previous model, for the two to client, which the recall has deep increased. I think maybe do I need to try the different laws when I change the model? Like, firstly, we want to maximize the usd show and minimize the recall.
+
+And so maybe the loss can designed to this one.
+说话人1 10:05
+Byebye.
+说话人3 10:06
+No, but you don't know the ratio.
+说话人2 10:10
+Right?
+说话人3 10:12
+The think is the ratio is different as well, because.
+说话人2 10:19
+that needed referential.
+说话人3 10:23
+You need something like this, right? Lambda here. But what lambda to use that, sir is a question.
+说话人2 10:31
+I think maybe we can say the number between this one and this one, and if we want, that depends on our preference.
+说话人3 10:44
+It's appealing business question. It's not a constant question, meaning that it also depends on the client preference, right?
+
+For example, some client can say, don't recall me. If you don't also recall me, don't show at all, then you have very extreme case, right? Or yeah, I let's assume we show. So we do have clients that you don't recall, right? Then the so called vip clients. Now, let's say we are showing this client 800 million daily, and then they pick 100 million to consume, right? Let's say. Now the only way of not recalling them when the inventory is gone. Instead of them, taking dairy, recall, our delta one, this carton will take the risk. If, let's say, 2 million of this gets recalled, this 2 million long position comes to the taiwan book.
+
+Now, the question is, how much?
+
+So from here, let's say we charge 5 % for consumption, so we make 5 million. Right? But this is annually, but how much does it cost us to hedge this? To make an exposure, right? Cause usually the stuff that gets recalled meaning everyone wants to sell, right? Mhm. It can drop, I don't know, in a day, five or whatever percent. If you lose 5 % per day annually, you just get killed, right?
+
+That's why the lambda is. Nobody can tell you what is the correct number to use. That's why we never did that.
+说话人2 12:33
+Okay, got it.
+说话人3 12:39
+If there is not that the one question, let's say it's a clan that we can recall, right?
+
+Now we show them 100 million. We recall them 3 million. Let's say if you show them hundred million and recall them 20 million, they're gonna shout on you. Was the cost of the shouting, getting shout, right? It's like they complain. So what's the cost of that? You lose business? They go away, they go to competitor. So what's the cost there? So it's really difficult to answer the lambda question.
+说话人2 13:11
+Okay?
+说话人3 13:12
+But we can always ask risk. Ii ask the business guys. So when you have your presentation, that's a very good question. Maybe they have some ideas for themselves. Okay?
+说话人2 13:22
+Spread the presentation is to,
+说话人3 13:26
+again, it's not formality. We will just sit on the table and you say, here's my results. You don't have to increase presentation,
+说话人2 13:32
+powerpoint,
+说话人3 13:34
+water, formal. You want. You can print an email. It's fine, email, email, print it, and then we sit down and discuss no formality. Don't spend too much time on it. Okay? Anything else of? All? Good? Happy so far?
+说话人1 13:50
+Okay. Are you? Ok.
