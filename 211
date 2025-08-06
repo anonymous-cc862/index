@@ -1,0 +1,397 @@
+
+def get_validation_mse_and_model(features, train_data, valid_data, model_params, target_col):
+    lgb_train = lgb.Dataset(train_data[features], label=train_data[target_col])
+    lgb_valid = lgb.Dataset(valid_data[features], label=valid_data[target_col])
+
+    model = lgb.train(
+        model_params,
+        lgb_train,
+        num_boost_round=300,
+        valid_sets=[lgb_valid],
+        callbacks=[lgb.early_stopping(5, verbose=False)]
+    )
+
+    valid_pred = model.predict(valid_data[features], num_iteration=model.best_iteration)
+    mse = mean_squared_error(valid_data[target_col], valid_pred)
+    return mse, model
+
+def process_data(rgi):
+    merged_df=pd.read_csv(f'merge_data_stability\\{rgi}_merged_data_1.csv')
+    merged_df['time_horizon'] = merged_df['time_horizon'].copy()
+    merged_df['AM_sell_qty'] = merged_df['500'] - merged_df['AM_CLOSE']
+    merged_df['AM_sell_amount'] = merged_df['AM_sell_qty'] * merged_df['price_unadj']
+    merged_df['5OD_amount'] = merged_df['5OD'] * merged_df['price_unadj']
+    merged_df['AM_CLOSE_amount'] = merged_df['AM_CLOSE'] * merged_df['price_unadj']
+    merged_df['AM_stability'] = merged_df['AM_CLOSE']/ merged_df['500']
+    merged_df['value_cal_eod'] = merged_df['value'] * merged_df['EOD']
+    merged_df['value_cal_eod_amount'] = merged_df['value_cal_eod'] * merged_df['price_unadj']
+
+    #pre process
+    if 'value_6' in merged_df.columns:
+        merged_df = merged_df.drop('value_6',axis=1)
+    merged_df=merged_df.dropna(subset=['500','AM_CLOSE','EOD','price_unadj'])
+    # target
+    merged_df['PM_Stability'] = merged_df['EOD'] / merged_df['5OD']
+    print("Adding lag features...")
+    merged_df = merged_df.sort_values(['ric', 'date']).reset_index(drop=True)
+
+    # rolling mean
+    merged_df['PM_Stability_3d_mean'] = merged_df.groupby('ric')['PM_Stability'].transform(lambda s: s.shift(1).rolling(3,min_periods=3).mean()) #不用到当天数据
+    merged_df['PM_Stability_3d_std'] = merged_df.groupby('ric')['PM_Stability'].transform(lambda s: s.shift(1).rolling(3,min_periods=3).std()) #不用到当天数据
+    merged_df['PM_Stability_7d_mean'] = merged_df.groupby('ric')['PM_Stability'].transform(lambda s: s.shift(1).rolling(7,min_periods=3).mean()) #不用到当天数据
+    merged_df['PM_Stability_7d_std'] = merged_df.groupby('ric')['PM_Stability'].transform(lambda s: s.shift(1).rolling(7,min_periods=3).std()) #不用到当天数据
+    merged_df['AM_Stability_3d_mean'] = merged_df.groupby('ric')['AM_stability'].transform(lambda s: s.rolling(3,min_periods=3).mean()) #用到当天数据
+    merged_df['AM_Stability_3d_std'] = merged_df.groupby('ric')['AM_stability'].transform(lambda s: s.rolling(3,min_periods=3).std()) #用到当天数据
+    merged_df['AM_Stability_7d_mean'] = merged_df.groupby('ric')['AM_stability'].transform(lambda s: s.rolling(7,min_periods=3).mean()) #用到当天数据
+    merged_df['AM_Stability_7d_std'] = merged_df.groupby('ric')['AM_stability'].transform(lambda s: s.rolling(7,min_periods=3).std()) #用到当天数据
+    merged_df['value_vs_3d_mean'] = merged_df['AM_sell_amount'] / (merged_df['AM_Stability_3d_mean'] + 1e-8) #用到当天数据
+    merged_df['value_3d_mean'] = merged_df.groupby('ric')['value'].transform(lambda s: s.rolling(3,min_periods=3).mean()) #用到当天数据
+    merged_df['value_3d_std'] = merged_df.groupby('ric')['value'].transform(lambda s: s.rolling(3,min_periods=3).std()) #用到当天数据
+    merged_df['value_7d_mean'] = merged_df.groupby('ric')['value'].transform(lambda s: s.rolling(7,min_periods=3).mean()) #用到当天数据
+    merged_df['value_7d_std'] = merged_df.groupby('ric')['value'].transform(lambda s: s.rolling(7,min_periods=3).std()) #用到当天数据
+    merged_df['value_vs_3d_mean'] = merged_df['value'] / (merged_df['value_3d_mean'] + 1e-8) #用到当天数据
+    merged_df['value_rel_mrk'] = merged_df.groupby('date')['value'].transform(lambda s: s-s.mean())
+    merged_df['AM_Stability_rel_mrk'] = merged_df.groupby('date')['AM_stability'].transform(lambda s: s-s.mean())
+    merged_df['AM_sell_amount_rel_mrk'] = merged_df.groupby('date')['AM_sell_amount'].transform(lambda s: s-s.mean())
+    merged_df['value_cal_eod_amount_rel_mrk'] = merged_df.groupby('date')['value_cal_eod_amount'].transform(lambda s: s-s.mean())
+    merged_df = merged_df.dropna(subset=['AM_Stability_7d_mean'])
+
+    # 打乱所有行的顺序
+    merged_df = merged_df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+    #select feature
+    data=merged_df.copy()
+    features = [
+        '500',
+        'AM_CLOSE', 'EOD',
+        'price_unadj',
+        'value_5', 'value_7', 'value_8', 'value_9',
+        'AM_sell_qty','AM_sell_amount','5OD_amount','AM_CLOSE_amount',
+        'AM_stability', 'value_cal_eod', 'value_cal_eod_amount', #'PM_Stability',
+        'PM_Stability_3d_mean', 'PM_Stability_3d_std', 'PM_Stability_7d_mean',
+        'PM_Stability_7d_std', 'AM_Stability_3d_mean', 'AM_Stability_3d_std',
+        'AM_Stability_7d_mean', 'AM_Stability_7d_std', 'value_3d_mean',
+        'value_3d_std', 'value_7d_mean', 'value_7d_std',
+        'AM_stability_vs_3d_mean', 'value_vs_3d_mean', 'AM_stability_rel_mrk',
+        'value_rel_mrk', 'AM_sell_amount_rel_mrk',
+        'value_cal_eod_amount_rel_mrk'
+    ]
+
+    target = 'PM_Stability'
+
+    required_cols = features + [target, 'date']
+    missing_cols = [col for col in required_cols if col not in data.columns]
+    if missing_cols:
+        print(f"Missing columns: {missing_cols}")
+
+    # Remove missing values
+    print(f"Original data size: {len(data)}")
+    data_clean = data.dropna(subset=features + [target])
+    print(f"After removing missing values: {len(data_clean)}")
+
+    #Split data by date, 80% dates for training, 20% for testing
+    unique_dates = sorted(data_clean['date'].unique())
+    print(f"Total {len(unique_dates)} trading days")
+    split_idx = int(len(unique_dates) * 0.8)
+    train_dates = unique_dates[:split_idx]
+    test_dates = unique_dates[split_idx:]
+    print(f"Training dates: {len(train_dates)} days ({train_dates[0]} to {train_dates[-1]})")
+    print(f"Testing dates: {len(test_dates)} days ({test_dates[0]} to {test_dates[-1]})")
+    train_data = data_clean[data_clean['date'].isin(train_dates)]
+    test_data = data_clean[data_clean['date'].isin(test_dates)]
+    print(f"Training set size: {len(train_data)}")
+    print(f"Test set size: {len(test_data)}")
+
+    # Apply winsorization on train(limits=(0.01, 0.01) means 1% from each tail)
+    train_data[target] = winsorize(train_data[target], limits=(0.01, 0.01))
+    #prepare data
+    X_train = train_data[features]
+    y_train = train_data[target]
+    X_test = test_data[features]
+    y_test = test_data[target]
+    #Standardize features
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+
+    #step 3. RFE
+    unique_dates = sorted(train_data['date'].unique())
+    split_idx = int(len(unique_dates) * 0.7)
+    train_dates = unique_dates[:split_idx]
+    valid_dates = unique_dates[split_idx:]
+
+
+    # Split data based on dates
+    train_part = train_data[train_data['date'].isin(train_dates)]
+    valid_part = train_data[train_data['date'].isin(valid_dates)]
+    print(f"Train size: {len(train_part)}, Valid size: {len(valid_part)}")
+    print(f"Original train dataset size: {len(train_data)}")
+    print(f"Training set size (70%): {len(train_part)}")
+    print(f"Valid set size (30%): {len(valid_part)}")
+    print("\n Step 3: Start Recursive Feature Elimination (RFE)")
+    params = {
+        "objective": "huber", #"regression",
+        "metric": "rmse", # 改为rmse
+        "learning_rate": 0.05,
+        "num_leaves": 32,
+        "feature_fraction": 0.8,
+        "bagging_fraction": 0.8,
+        "bagging_freq": 1,
+        "lambda_l2": 1,
+        "seed": 42,
+        "verbose": -1,
+        "n_jobs": -1
+    }
+
+    # 开始RFE
+    current_features = features.copy() #final_features_step1.copy()
+    rfe_results = []
+    min_features_to_keep = 25
+
+    while len(current_features) > min_features_to_keep:
+        val_mse, trained_model = get_validation_mse_and_model(
+            current_features, train_part, valid_part, params, target)
+        rfe_results.append({
+            'num_features': len(current_features),
+            'val_mse': val_mse,
+            'features': current_features.copy()
+        })
+        print(f"Feature Num: {len(current_features):<3} | Valid MSE: {val_mse:.6f}")
+        # 获取特征重要性
+        importance = pd.DataFrame({
+            'feature': trained_model.feature_name(),
+            'importance': trained_model.feature_importance(importance_type='gain')
+        }).sort_values(
+            by='importance',
+            ascending=True,
+            )
+        # 移除最不重要的特征
+        feature_to_remove = importance.iloc[0]['feature']
+        current_features.remove(feature_to_remove)
+        print(f" Removed feature: {feature_to_remove}")
+
+    # 选择最佳特征组合
+    if not rfe_results:
+        best_features_list = features #final_features_step1
+        print("No RFE results, using original features")
+    else:
+        # 选择MSE最小的特征组合
+        best_run = min(rfe_results, key=lambda x: x['val_mse']) # 改为min,因为MSE越小越好
+        best_mse = best_run['val_mse']
+        best_num = best_run['num_features']
+        best_features_list = best_run['features']
+        print(f"\nBest validation set MSE: {best_mse:.6f}")
+        print(f"The corresponding optimal number of features is: {best_num}")
+        print(f"\nThe best feature combinations are as follows:")
+        print('\n'.join(wrap(str(best_features_list), 120)))
+
+    if rfe_results:
+        print(f"\nRFE Results Summary:")
+        for result in rfe_results:
+            print(f"Features: {result['num_features']:<3} | MSE: {result['val_mse']:.6f}")
+
+    return best_features_list, X_train, X_test, y_train, y_test, test_data, train_data, merged_df
+
+# Train models with fixed XGBoost parameters
+def train_models(X_train, y_train, best_features_list):
+    """Train models with fixed hyperparameters using best features"""
+    print("\n=== Model Training with Fixed Parameters ===")
+    print(f"Using {len(best_features_list)} selected features: {best_features_list}")
+    # 只使用最佳特征
+    X_train_selected = X_train[best_features_list]
+    models = {}
+
+    # Fixed XGBoost parameters
+    xgb_params = {
+        'n_estimators': 200,
+        'max_depth': 6,
+        'learning_rate': 0.1,
+        'subsample': 0.8,
+        'colsample_bytree': 0.8,
+        'reg_alpha': 0.1,
+        'reg_lambda': 1.0,
+        'random_state': 42,
+        'verbosity': 0
+    }
+
+    print("Training XGBoost model with fixed parameters...")
+    print("XGBoost parameters:", xgb_params)
+    # Train XGBoost model on all training data
+    xgb_model = xgb.XGBRegressor(**xgb_params)
+    xgb_model.fit(X_train_selected, y_train)
+    models['XGBoost'] = xgb_model
+    print("XGBoost model training completed!")
+    return models
+
+# Evaluate models
+def evaluate_models(models, X_test, y_test, test_data, best_features_list):
+    """Evaluate all models using best features"""
+    print("\n=== Model Evaluation ===")
+    print(f"Using {len(best_features_list)} selected features for evaluation")
+    results = {}
+    # 只使用最佳特征
+    X_test_selected = X_test[best_features_list]
+    results_df = pd.DataFrame()
+    results_df['date'] = test_data['date'].values
+    results_df['ric'] = test_data['ric'].values
+    results_df['price_unadj'] = test_data['price_unadj'].values
+    results_df['5OD'] = test_data['5OD'].values
+    results_df['AM_CLOSE'] = test_data['AM_CLOSE'].values
+    results_df['EOD'] = test_data['EOD'].values
+    results_df['5OD_Stability_factor'] = test_data['value'].values
+
+    # Evaluate models
+    model_predictions = {}
+    for name, model in models.items():
+        print(f"\n{name}:")
+        # Prediction
+        if name == 'LightGBM':
+            y_pred = model.predict(X_test_selected)
+        else: # XGBoost
+            y_pred = model.predict(X_test_selected)
+        model_predictions[name] = y_pred
+        # Calculate evaluation metrics
+        mse = mean_squared_error(y_test, y_pred)
+        rmse = np.sqrt(mse)
+        mae = mean_absolute_error(y_test, y_pred)
+        r2 = r2_score(y_test, y_pred)
+        mape = np.mean(np.abs((y_test - y_pred) / (y_test + 1e-8))) * 100
+        pearson_corr, _ = pearsonr(y_test, y_pred)
+        spearman_corr, _ = spearmanr(y_test, y_pred)
+        results[name] = {
+            'MSE': mse,
+            'RMSE': rmse,
+            'MAE': mae,
+            'R2': r2,
+            'MAPE': mape,
+            'Pearson Correlation': pearson_corr,
+            'Spearman Correlation': spearman_corr,
+            'predictions': y_pred
+            }
+        print(f"  MSE: {mse:.6f}")
+        print(f"  RMSE: {rmse:.6f}")
+        print(f"  MAE: {mae:.6f}")
+        print(f"  R2: {r2:.4f}")
+        print(f"  MAPE: {mape:.2f}%")
+        print(f"  Pearson Correlation: {pearson_corr:.6f}")
+        print(f"  Spearman Correlation: {spearman_corr:.6f}")
+
+
+    # Add predictions to results DataFrame
+    if model_predictions:
+        for model_name, predictions in model_predictions.items():
+            results_df[f'PM_Model_stability_factor_{model_name}'] = np.maximum(predictions, 0)
+    return results, results_df
+
+# 修改feature_importance_analysis函数
+def feature_importance_analysis(models, best_features_list):
+    print("\n=== Feature Importance Analysis ===")
+    # XGBoost feature importance
+    if 'XGBoost' in models:
+        xgb_importance = pd.DataFrame({
+            'feature': best_features_list,
+            'importance': models['XGBoost'].feature_importances_
+        }).sort_values('importance', ascending=False)
+        print("\nXGBoost Feature Importance:")
+        print(xgb_importance)
+        plt.figure(figsize=(10, 6))
+        sns.barplot(data=xgb_importance, x='importance', y='feature')
+        plt.title('XGBoost Feature Importance')
+        plt.tight_layout()
+        plt.show()
+
+# Generate summary report
+def generate_summary_report(results):
+    print("\nModel Performance Summary Report")
+    results_df = pd.DataFrame(results).T
+    results_df = results_df.drop('predictions', axis=1)
+    print(results_df.round(6))
+    # Find best models
+    best_model_r2 = results_df['R2'].idxmax()
+    best_model_rmse = results_df['RMSE'].idxmin()
+    print(f"\nBest model (R2): {best_model_r2} (R2 = {results_df.loc[best_model_r2, 'R2']:.4f})")
+    print(f"Best model (RMSE): {best_model_rmse} (RMSE = {results_df.loc[best_model_rmse, 'RMSE']:.6f})")
+    return results_df
+
+```python
+def get_results(results_df_new,merged_df,rgi):
+    #result
+    df1_merged = results_df_new.merge(
+        merged_df[['date','ric','value_75', 'value_8', 'value_85', 'value_9']],
+        on=['date','ric'],
+        how='left'
+        )
+
+    # with error handling
+    for col in ['value_75', 'value_8', 'value_85', 'value_9']:
+        df1_merged[f'{col}_pred'] = np.where(
+            (df1_merged['500_Stability_factor'] != 0),
+            df1_merged[col] * df1_merged['PM_Model_stability_factor_XGBoost'] / df1_merged['500_Stability_factor'],
+            np.nan # or 0, depending on your preference
+        )
+    pred_cols = ['value_75_pred', 'value_8_pred', 'value_85_pred', 'value_9_pred']
+    df1_merged[pred_cols] = df1_merged[pred_cols].clip(lower=0, upper=1)
+    date=pd.to_datetime('20250715')
+    fx = mkt_date.get_fx_date(date, ['USD'])
+    fx = fx['fx'].values
+    df1_merged['5OD_USD']=df1_merged['price_unadj']*df1_merged['5OD']/fx['fx'].iloc[0]
+    df1_merged['AM_CLOSE_USD']=df1_merged['price_unadj']*df1_merged['AM_CLOSE']/fx['fx'].iloc[0]
+    df1_merged['EOD_USD']=df1_merged['price_unadj']*df1_merged['EOD']/fx['fx'].iloc[0]
+
+    for quantile in [None, 0.75, 0.8, 0.85, 0.9]:
+        if quantile==None:
+            df1_merged['Current_USD']=np.minimum(df1_merged['AM_CLOSE'], df1_merged['5OD']*df1_merged['5OD_Stability_factor'])* df1_merged['price_unadj']/fx['fx'].iloc[0]
+            df1_merged['New_USD']=df1_merged['5OD']*df1_merged['PM_Model_stability_factor_XGBoost']*df1_merged['price_unadj']/fx['fx'].iloc[0]
+            df1_merged['Current_Recall']=np.maximum(0, df1_merged['Current_USD']-df1_merged['EOD_USD'])
+            df1_merged['New_Recall']=np.maximum(0, df1_merged['New_USD']-df1_merged['EOD_USD'])
+        else:
+            value_col = f"{str(quantile).replace('0.','')}"
+            df1_merged[f'Current_USD_{value_col}']=np.minimum(df1_merged['AM_CLOSE'], df1_merged['5OD']*df1_merged[f'value_{value_col}'])* df1_merged['price_unadj']/fx['fx'].iloc[0]
+            df1_merged[f'New_USD_{value_col}']=df1_merged['5OD']*df1_merged[f'value_{value_col}_pred'] * df1_merged['price_unadj']/fx['fx'].iloc[0]
+            df1_merged[f'Current_Recall_{value_col}']=np.maximum(0, df1_merged[f'Current_USD_{value_col}']-df1_merged['EOD_USD'])
+            df1_merged[f'New_Recall_{value_col}']=np.maximum(0, df1_merged[f'New_USD_{value_col}']-df1_merged['EOD_USD'])
+
+    daily_summary = df1_merged.groupby('date')[[
+        'Current_USD', 'New_USD', 'Current_Recall', 'New_Recall',
+        'Current_USD_75', 'New_USD_75', 'Current_Recall_75', 'New_Recall_75',
+        'Current_USD_8', 'New_USD_8', 'Current_Recall_8', 'New_Recall_8',
+        'Current_USD_85', 'New_USD_85', 'Current_Recall_85', 'New_Recall_85',
+        'Current_USD_9', 'New_USD_9', 'Current_Recall_9', 'New_Recall_9'
+    ]].sum()
+
+    mean_summary = daily_summary.mean(numeric_only=True)
+    # Calculate differences manually
+    differences = {}
+    # Base metrics
+    differences['USD_diff'] = mean_summary['New_USD'] - mean_summary['Current_USD']
+    differences['Recall_diff'] = mean_summary['New_Recall'] - mean_summary['Current_Recall']
+    # for different thresholds
+    thresholds = ['75', '8', '85', '9']
+    for threshold in thresholds:
+        differences[f'USD_diff_{threshold}'] = (
+            mean_summary[f'New_USD_{threshold}'] - mean_summary[f'Current_USD_{threshold}']
+        )
+        differences[f'Recall_diff_{threshold}'] = (
+            mean_summary[f'New_Recall_{threshold}'] - mean_summary[f'Current_Recall_{threshold}']
+        )
+    
+    # Convert to DataFrame for better display
+    diff_df = pd.DataFrame(differences, index=[rgi])
+    #all_results=pd.concat([all_results, diff_df])
+    return diff_df
+
+all_results=pd.DataFrame()
+
+for rgi in ['MEIFU', 'JSONY', 'QUBE MASTER FUND', 'TORUS FUND', 'Dao Fund', 'CIFTL', 'ATRAIN', 'DESH', 'WFEEF', 'TMO SIGMA', 'UPAPT', 'CAPMA']:
+    print('dataset: ', rgi)
+    best_features_list, X_train, X_test, y_train, y_test, test_data, train_data, merged_df=process_data(rgi)
+    models = train_models(X_train, y_train, best_features_list)
+    results, results_df_new = evaluate_models(models, X_test, y_test, test_data, best_features_list)
+    feature_importance_analysis(models, best_features_list)
+    summary = generate_summary_report(results)
+    results_df_new['PM_Model_stability_factor_XGBoost'] = np.minimum(results_df_new['PM_Model_stability_factor_XGBoost'], results_df_new['AM_CLOSE'] / results_df_new['5OD'])
+    #results_df_new['PM_Model_stability_factor_LightGBM'] = results_df_new['PM_Model_stability_factor_LightGBM'] #np.minimum(results_df_new['PM_Model_stability_factor_LightGBM
+    diff_df=get_results(results_df_new,merged_df,rgi)
+    all_results=pd.concat([all_results, diff_df]) #get_results(results_df_new,merged_df)
+
