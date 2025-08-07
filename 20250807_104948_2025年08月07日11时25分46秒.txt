@@ -1,0 +1,159 @@
+﻿20250807_104948
+说话人1 00:00
+Right?
+说话人2 00:40
+Trying on this. And by the way, I make a habit of locking your screen when you leave the desk.
+说话人1 01:00
+and another.
+说话人2 01:03
+master received all this trainings, right? And then there is a like every year we need to do the lots of training. We have another end of september.
+说话人1 01:16
+Yeah, I think I have finished all the training sections on the workdays.
+说话人2 01:22
+Okay, just want to say that those are super important. We cannot miss them.
+说话人1 01:28
+I have finished it.
+说话人2 01:29
+If we leave something gone down, it goes up to the like head of markets level.
+说话人1 01:32
+Okay, I think I have completed, of course,
+说话人2 01:37
+the way the stability, right? We do the calibration every week and then we save the whatever needs to miss. Basically, we save the the calibrated model as apk file, and then calculation. We just read this pk file and do the current calculations. We need to follow similar logic for you. When you do calibration, first of all, fixed parameters don't don't change parameters. Every time the parameter selection is more gonna be, it's like, let's say we want once a month or twice a year, whatever, right? You can use that of up to now,
+说话人1 02:20
+up to now on. And the midterm of july, I think the the whole data set. So the testing results, you say, is about the latest 10 days.
+说话人2 02:37
+Now, basically, when you look up, so you got your parameter set, right? You fixed it for now and then for calibration, then you use all the data available. You don't have to keep some for testing, right? You just use the whole data for training, right? And then you save that object, and that's it. So maybe in 3 months, we see performance is not good, or we just want to do standard review, then you might call or re calibrate and say, we need to change this parameter to this one, because this is better than we fix the parameter and continue.
+
+Parameter selection is basically just there. It's a static. We don't do parameter selection every time we calibrate. Yeah.
+说话人1 03:19
+But for the feature selection, the different clients have different features because I use rref to to select features based on the utility function, but the utility functions parameter are fixed. During this process, the feature sets may change,
+说话人2 03:48
+but they shouldn't write why should they change?
+说话人1 03:52
+Yeah, because different clients have different, like show df and record df and how to say. So different clients have the individual process to select features.
+说话人2 04:11
+No, but once you select these features, right? Let's say you do calibration. And during this calibration, you select the features, and then you save that features.
+说话人1 04:20
+A no.
+
+Actually, now I just use the ref this process for each clients in the modeling process. But so there is a pair of the future results are different based on the data training data.
+说话人2 04:42
+I get that,
+说话人1 04:43
+okay,
+说话人2 04:45
+only for each client, you save the feature name features.
+说话人1 04:50
+So actually different clients have different features. It's not very significant, different, because I set the minimum number of features are 15, almost the all plans have about 29 or like 25 features.
+说话人2 05:14
+Isn't it? Or if you think ii hope we don't have that much data and your the marks depth is quite higher, right?
+说话人1 05:24
+The data.
+
+Actually, I think the data is enough, because each day we have many data for one day, ii have sent you the data size,
+说话人2 05:41
+I remember. Okay, that's fine. So basically then you will have a calibration job to run every friday night, right? And then during daytime, and also we need to be super quick, right? So do you have a time as a variable or.
+说话人1 06:03
+not? Sorry,
+说话人2 06:05
+when you do the, like you are doing only lunchtime now? Only I am close,
+说话人1 06:10
+am.
+说话人2 06:12
+am.
+说话人1 06:13
+only am close.
+
+Actually, I have designed some other features like am compared with the market am close. So what is the market am close? That is,
+说话人2 06:39
+what do you mean market am closing.
+说话人1 06:41
+average of all clients? No. Sorry, market close. Yeah, that's the average of each rick average.
+说话人2 06:56
+Sorry. So just from from outsiders . of view, right? Ultimately, what you have is you had the sod position, you had the sod stability. At this time, you have, basically, let's say, time tt position. Right? And then we need to calculate the stability for the next 5 days, let's say, right? Yeah. This t for you is I am close, right? Eleven forty, basically.
+说话人1 07:58
+Or maybe I think I can send you the future lists. I'm not.
+说话人2 08:02
+iii don't need that, but just to clarify, we need to stop modeling.
+
+For now, that's past, it's done. Okay? Now basically, what you will do at lunch time, right? You will read the positions. And then for each client, you will tell what's the new stability? No stability factor. The way we have the I saw the stability factors we are saving in this eve stb 24, right? Dot pk right?
+说话人1 08:51
+Where.
+说话人2 08:53
+do you read? So the stability factors, pk fine. Yeah. So you need to produce some similar format.
+说话人1 09:01
+Sorry,
+说话人2 09:04
+where do you read this or the stability numbers from apk file or not?
+说话人1 09:12
+Stability. That is the end of.
+说话人2 09:14
+the model. I know this probably.
+说话人1 09:16
+The daily end of day divided by sod and 5 days is.
+说话人2 09:21
+no model stability. The end of.
+说话人1 09:25
+that's in the fire,
+说话人2 09:28
+right? So this fire, right? Okay?
+
+Then this file gets generated the od every day, right? So we need another file which has raked this round group by near, right? And maybe quantity and then stop ability factor, right? Value. But then you have power arms. You have time horizon. Yeah, so you kind of need to have similar format to this.
+说话人1 09:53
+Okay? Okay.
+说话人2 09:57
+Then you put your new stability now. Right? Then last time we generated ok right? Let's get this done.
+
+Then next thing that we will do, we have like, what if it's not lunch time? So we need to generate four different time stops.
+说话人1 10:17
+Now we only have the end of day, but you mean, we have the intraday each time step. What is the time step?
+说话人2 10:26
+So we have ten or two. Let's say, 10, 00, 10, 40, 11, 00.
+说话人1 10:34
+Yeah. But for it, I need to have the value at this time step, like the eod at this time step so that I can on the.
+说话人2 10:44
+only positions, right? You have that.
+说话人1 10:48
+I have it.
+说话人2 10:49
+The problem is, are you gonna model this? You cannot apply your lifetime more than to 10:00 am model, right? Most likely.
+说话人1 10:55
+But the data you gave me only had a end of day, and.
+说话人2 11:02
+that I gave you has the 1140 as well, right?
+说话人1 11:06
+Yeah, that's the am close. But what's other data at? No,
+说话人2 11:12
+this data is there. Don't worry about that.
+
+It's easy to get. Let's get this done. So we need to have this working for lunch time. And then we do this. If you can make it continuous, it would be much better. But that's a lot more difficult. So instead of this fixed times, actually you have some tea.
+
+We need this to be more reasonable, not to jump in, which might be actually challenge if we are using machine learning model. For example, let's say some client, right? It they didn't sell until 10:00 am nothing was solved. Then you calculate, let's say, so the stability was 80 %, right? And then you are here saying 75 %. They didn't sell either, right? And then you cannot say, now it's 82 %. Maybe it's correct, but then it's a bit more unpredictable from business perspective.
+说话人1 12:14
+Okay?
+说话人2 12:15
+In the sunset. Because it's based on this, we're gonna tell the client whether we have it or not, right.
+
+Now, here we say we don't have it. And then next we say, actually, we have it. So this is dangerous. We need to be explainable.
+
+Maybe it shouldn't go up witness to be decreasing something like this, right? I understand that actually, that might be the case that if they don't sell until 10:00 and then they don't sell until 10:30, then the stability estimate is gonna be higher, right? It's completely reasonable. Yeah. And maybe it's not monotonic, but at least we need to have some consistency.
+说话人1 13:00
+Okay?
+说话人2 13:01
+Because otherwise sale is gonna sale and they gonna come every half an hour. Why did it change to so much at center attention? Right? So only we need to smoke somehow.
+说话人1 13:10
+Ok. Nasa.
+说话人2 13:17
+Yeah, let's get this done first. So fix the parameters, we don't do more the link anymore, fix the parameters, get all the results that you have. You can do it until tomorrow. Yeah, sure. Then I will set up a meeting with eric on the team tomorrow. So you show your results.
+说话人1 13:41
+with the funding team tomorrow. Okay.
+说话人2 13:46
+Why are you confused me?
+说话人1 13:48
+Not?
+
+Now, I just want to prepare a little.
+说话人2 13:52
+again, if you your time is a lot more valuable for modeling than creating the most beautiful presentation in the world. Okay, you don't have that much time. Just get the numbers, so they can go through and they are all technical areas used to be, quote, it's okay. You will understand. You don't need to draw like light, blue versus byebye, dark green for making your presentation beautiful. It doesn't even have to be ppt just get the results. Okay? You will do that beautiful presentation as part of your internship for the whole quantum and global. Okay? Then you can worry about how beautiful it is. Now, it's only about numbers, okay? Let's get down, get the results, send it to me. First. Again, every minute you spend on cosmetic, it's a wasted time. Okay, and then you work on this.
+说话人1 14:47
+Okay, cool. Thank you.
