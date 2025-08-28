@@ -1,0 +1,115 @@
+﻿20250828_092051
+说话人1 00:00
+Byebye. Byebye.
+说话人2 00:17
+Nasa. Nasa ok.
+说话人1 00:37
+nana, ok. Nasa.
+说话人3 01:09
+Here is a date on that. Type of binary state needs to change the type of the bias. Here is in danger. So what is it? Here? It is.
+说话人1 01:20
+The first one.
+说话人3 01:22
+Then why do you have to make any data and then convert it to data?
+说话人4 01:26
+This one needs to make sure it is a date.
+说话人1 01:36
+tag.
+说话人3 01:37
+But it is late, right? Why do you have.
+说话人1 01:39
+to convert it again today? Just to?
+说话人4 01:43
+We see the same side?
+说话人3 01:45
+No, if you didn't come here as a date, it means you have an issue before here. If it came here for any reason as a string or whatever, right?
+
+And then you are making it to date, then you are introducing a a lot more risk. Do you need to understand if your expectation here that this is gonna come out on date? And then it doesn't come out and date? Why did it didn't come out? You are not capturing what the nation before this function. But even I so you have the last date is a date object, right? So why do we have to make this then? Why not pass just last date?
+说话人1 02:26
+Yeah.
+说话人3 02:29
+And also why to convert it to date again, this function does return update.
+
+What this conflict started.
+说话人4 02:46
+That is the if we don't have the existing data, Free I the historical data, then I set a start date in a setting dresser. And that is the beginning date,
+说话人1 03:04
+byebye.
+
+Byebye NASA.
+说话人3 04:26
+Like, do you expect ever to have this.
+说话人1 04:31
+this case?
+说话人3 04:38
+The return of dysfunction, right? Will it ever return started better than and.
+说话人1 04:44
+they, yes,
+说话人3 04:46
+one will do in the case.
+说话人4 04:50
+If the data has arrived to it, then the start date
+
+it's used, it starts from the they. The update dated. It sets the updated file from the historical daytime. And if the NASA the found has already existed that it will us get the data from the day after.
+说话人3 05:35
+And that file is what so.
+说话人4 05:37
+consisting existing df the data has.
+说话人3 05:44
+what are you reading?
+说话人4 05:46
+Actually, for at the beginning, I get the data from like the 22,000. That is the start date of data. The data includes the stability and the eod and sod and am close all those features.
+说话人3 06:16
+You generate the data.
+说话人4 06:19
+And the dysfunction will check whether previously this data set has already existing, if it has already existing, then, like and.
+说话人3 06:36
+it's not.
+说话人4 06:39
+What happens if it is not? It will get the data from this time to the, but.
+说话人3 06:47
+you expect it to exist, right? Because you are running some Castro.
+说话人4 06:51
+Yeah, so if.
+说话人3 06:53
+if your cash job has had an issue, you are not gonna know about it, right?
+说话人4 06:58
+If we don't have this data, it will at it will get the data from this.
+说话人3 07:05
+No, but that's what I'm saying. You expect to have the data. If the data is not there, it means there is some issue with your processes.
+说话人4 07:11
+Do you mean this date or this date?
+说话人3 07:17
+Do you have one process that generates this data? Correct? Then you expect this data to be there. Now you have another process that reads this data. When this process reads this data, you expect not the process. Actually, you personally expect this data to be there. Right?
+
+Now you are telling to this process. If the data is not there, you go and get it yourself. You will never know that there was an issue in your 4th process that is generating the data.
+说话人4 07:46
+I have generated this data. They are some yes.
+说话人3 07:53
+So if you have a process, you need to trust that process, right? You need to make sure that if this process fails about it, you fix. But then the second puzzle that reads this process needs to rely that the data is gonna be there. If it's not there, it shouldn't get the data itself. Unless there is a good reason to do that. So there can be good reason in cases, right? But other like, just taking first class, you expect this.
+
+Now, if this process doesn't find, you guess, the data, you are not aware that your first process would have some issues.
+说话人1 08:26
+Okay, right? And.
+说话人3 08:28
+then it will every time your process will run a lot slower, et cetera, because it needs to get the data itself. You are not aware that there is a process, so you put the correct checks on your first process that if it cannot generate data, it tells you it sends an EMAIL or whatever, right? The process face.
+
+Then you are aware that the process that generate this data has failed, right? And then you can do quite a bit, but the second process already needs to run when it was such a successful. This one doesn't need to check. Otherwise. It's way too many checks,
+说话人1 09:02
+right? Yeah. Nasa, NASA, CPP. Nasa? Nasa NASA.
+说话人4 09:54
+It is in the second season.
+说话人3 09:59
+That's zero. This is a new folder that you are creating, then you expect it to be there. Right? So why do you check? That? Is there are not. It's great. So I guess this is where you save your daily results. All right. Now let's say 1 week we are generating the standards, and then, let's say some one came. And by mistake, now you come here and you create a new one.
+
+Yeah. And you never know that there was an issue with someone that someone came and they didn't follow.
+说话人1 10:34
+Right.
+说话人3 10:36
+You expect the order to be there, just read it. It's not there, okay? For all.
+说话人4 10:41
+I don't need to create it, just check.
+说话人3 10:49
+it. No. If you are running first day, the very first day you can go and manually create, okay? And you expect that to be there. So if someone by mistake to list this folder, your job will fail. You will know you will try to find out who and why it has been dedicated and fix the issue recover or whatever. But if you do this, you will not know about that. And then the file is done, right on your previous results. Is that.
+说话人1 11:20
+early.
