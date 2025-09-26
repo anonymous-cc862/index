@@ -1,0 +1,109 @@
+﻿20250926_133241
+说话人1 00:00
+NASA. We already working on the presentation is too early.
+说话人2 00:29
+I think I should prepare.
+说话人3 00:33
+Yeah, right. It's up to you. Just make sure that you have it ready a week before its own term. We go through it. There might be a few iterations that we need to do. Okay, so it's end of August, right? End of October,
+说话人2 00:46
+but actually can I end the internship 1 week earlier? Because I think I have two more paid leave and the Wednesday is the holiday. And could I take two more day off because I have a conference meeting in Ningbo university?
+说话人3 01:15
+And what do you mean to finish early?
+说话人2 01:17
+Yeah, actually the end date of my internship is the 31st in October, okay, yeah. And March 9 and it one week earlier, the II the previous Friday.
+说话人3 01:41
+When is your presentation scheduled?
+说话人2 01:44
+The end of the, I think that's the Monday in the last week.
+
+The it was scheduled on 27th October, a condemn and the internship, the.
+说话人3 02:26
+24. We cannot just stand it also. If it's scheduled 27 of them, when you're gonna do the presentation,
+
+you do need to do this presentation. Why do you need to leave early?
+说话人2 02:43
+Because I have a conference meeting in Ningbo university. And that's actually a an invitation from that university to share my previous research. I was asked by my professor to it's better to do it.
+说话人3 03:08
+So first of all, these dates are in contract, right? I don't think it was. So first of all, you do need to the presentation here. Okay. So when do you need to be there? Exactly?
+说话人2 03:19
+Yeah.
+说话人3 03:27
+Yeah, you need to talk to hr if it's doable, probably III don't know. They need to advise. Ii don't know whether it can happen early or they put it out on paid holiday or whatever, but presentation we need to handle, then you need to ask this guy if you can do it another day.
+
+Okay, sure. Okay, yeah. These results, did you have to make lots of code changes to run this?
+说话人2 03:55
+I first is that I change the am close to be the the lifetime, which is the latest latest time step before our setting date. Like if I said, we need to get the ten thirties, then it will search the latest file in our folder, like it searched ten, seven. It will get this.
+说话人3 04:34
+But in terms of code change, how much code change did you have to do?
+说话人2 04:37
+You mean the change? What change?
+说话人3 04:44
+You had the am results, right? I'm trying to understand to generate these results. What did you change?
+说话人2 04:50
+I didn't change the procedure of the whole infrastructure, but some only some features and how to read the they change.
+说话人3 05:05
+the features.
+说话人2 05:06
+Not the I changed the am close to the,
+说话人3 05:10
+okay, but my machine learning creatures, right?
+说话人2 05:12
+No, yeah.
+说话人3 05:13
+What do we need to start generally generating this on a every hour?
+
+Let's say we want to run this in production. We generate this every hour. So what do we do?
+说话人2 05:29
+This one.
+说话人3 05:30
+you only have.
+说话人2 05:31
+Yeah, I think because I didn't change the whole infrastructure. So we just put it into production. I think we don't need too much change because it is the same for mate with the previous one from the reading data to generating the.
+说话人3 05:54
+right.
+
+But now we need to run the job multiple times, right?
+说话人2 05:59
+Yeah. So each time we need to put the command in the terminal each hour,
+说话人3 06:08
+can we just have one but regenerate.
+说话人2 06:11
+just one, but we can we can preset the time I and just put one command.
+说话人3 06:25
+We want to kick off process in the morning. That will just when the time comes, it generates the result, just one process.
+
+We have a few of these examples. You can check with sure the process it goes. And then once it hits the time, it runs, and then it waits until next time, and then it runs again. Okay? So let's do that and calibration. Then you need you will need lots of calibration objects, right? Yeah. When you calibrate, can you have one big object? Let's say, for one client, you have one big object that has all the time stamps in it,
+
+whatever you are saving now. Right? So instead of saving that thing, you save dictionary. That is, let's say, 10, 30 days, 11, 30 days. So it's a one big dictionary.
+说话人2 07:38
+One day we have only one dictionary for.
+说话人3 07:42
+each nouns. I'm talking about current training, okay? For training. Now, we are saving this training courses, right? For each plan, you have one file now, okay?
+
+Now if you start doing for each client, for each times time, that's going to be too large, I don't want our college training object to have 200 fives, okay? If you can for each client, you have only one file ok which is a dictionary of timestamp, and then the color of the trend object that you have now ok then your job when it runs, it will pick up the correct time step and run on that.
+
+Can we work on that? Yeah, I don't think, first of all, the results very good. We should put this into production, but I don't think you have much time to do any new project. Okay, so let's finish this. It depends when you finish, right? If you finish in 3 days, then we have time, like if you finish in 3 weeks, then we don't have time, okay?
+说话人2 08:39
+And I need to prepare the presentation. Like 1 week find out.
+说话人3 08:44
+if you can do it earlier first and then. Yeah. Because once you prepare, there will be back and forth between you and I right? I need to review what you are presenting.
+
+So that's why if you prepare for a couple of days early, then I can give my comments. Okay? Okay, and one thing make sure there are no crime nouns in the presentation.
+说话人2 09:07
+Sure, go.
+说话人3 09:09
+Cool. Let's move with this. Let's be a bit quick on this place. You can work with you to understand how to do the tank, okay? And then if you put river switch at dawn and understand.
+说话人2 09:22
+each other, okay,
+说话人3 09:24
+anything else?
+说话人2 09:25
+No.
+说话人1 09:26
+Okay. Nana there's also, somebody doesn't know is that it's like a speaker, even for this one, they have it like, I think like 5 or 10 minutes afterwards.
+
+Yeah, it will be both automatically just that they did us. We got exactly where the market was dropped. That's doing that's. They do like a suite, at least just to make sure that one of the students and they just as a guessing, because that's what you don't do that. And I could have seen this ps as well, like 50 for Taiwan with txt. It doesn't get like completed here. Italy reply to this, in fact, is not completed. I I so isn't based. Yeah. They're not going to fly. They're going to like iPhone, ego, sunshine b CCTV, Bot is what everything is in the pipe. That's not the best way people. Yeah, it's not really good learning. And even if you byebye. Nasa. Txt, NASA. Put down with you.
+
+There is, but you can take 5 points last year so that wstv,
+
+以上内容由AI生成，仅供参考
